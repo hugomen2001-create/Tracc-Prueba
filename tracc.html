@@ -22,13 +22,9 @@
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;overflow:hidden}
 
 /* ── SCREENS ── */
-/* screens: loading y login son overlays fixed, app es normal */
-#screen-loading{display:none;position:fixed;inset:0;z-index:500;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;gap:12px}
-#screen-loading.active{display:flex}
+/* screens */
 #screen-login{display:none;position:fixed;inset:0;z-index:400;background:#dcdcd8;align-items:center;justify-content:center}
-#screen-login.active{display:flex}
 #screen-app{display:none}
-#screen-app.active{display:block}
 
 /* ── LOGIN ── */
 .login-shell{width:900px;height:580px;display:flex;border-radius:18px;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.08),0 28px 70px rgba(0,0,0,.22);background:var(--bg2)}
@@ -245,7 +241,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 <body>
 
 <!-- LOADING -->
-<div id="screen-loading" class="screen active">
+<div id="screen-loading" style="display:flex;position:fixed;inset:0;z-index:500;background:var(--bg);flex-direction:column;align-items:center;justify-content:center;gap:12px">
   <div class="loader"></div>
   <div style="font-size:13px;color:var(--text3);font-weight:500">Cargando Tracc...</div>
   <div style="font-size:11px;color:var(--text3);margin-top:4px">Conectando con Supabase...</div>
@@ -542,9 +538,15 @@ function showToast(msg, dur=3000) {
 }
 
 function showScreen(name) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  const el = document.getElementById('screen-' + name);
-  if(el) el.classList.add('active');
+  const loading = document.getElementById('screen-loading');
+  const login   = document.getElementById('screen-login');
+  const app     = document.getElementById('screen-app');
+  if(loading) loading.style.display = 'none';
+  if(login)   login.style.display   = 'none';
+  if(app)     app.style.display     = 'none';
+  if(name === 'loading' && loading) loading.style.display = 'flex';
+  if(name === 'login'   && login)   login.style.display   = 'flex';
+  if(name === 'app'     && app)     app.style.display     = 'flex';
 }
 
 function getInitials(name) {
