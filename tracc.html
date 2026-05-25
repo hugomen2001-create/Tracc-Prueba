@@ -72,7 +72,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 @keyframes _spin{to{transform:rotate(360deg)}}
 
 /* ── APP SHELL ── */
-#screen-app{overflow:hidden}
+#screen-app{overflow:hidden;height:100%}
 .shell{display:flex;height:100vh;width:100%;overflow:hidden}
 .sidebar{width:var(--sidebar);min-width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;transition:width .22s,min-width .22s}
 .sidebar.collapsed{width:56px;min-width:56px}
@@ -227,7 +227,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 #toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 
 /* ── LOADING ── */
-#screen-loading{background:var(--bg);align-items:center;justify-content:center;flex-direction:column;gap:12px}
+#screen-loading{background:var(--bg);align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:500}
 .loader{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:_spin .7s linear infinite}
 
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -773,22 +773,25 @@ async function initApp(user, fromLogin = false) {
   if(!fromLogin) showScreen('loading');
   try {
     // Cargar datos del coach
-    const { data: coach } = await sb.from('coaches').select('*').eq('id', COACH_ID).single();
-    coachData = coach;
+    const { data: coach, error: coachErr } = await sb.from('coaches').select('*').eq('id', COACH_ID).single();
+    if(coachErr) console.warn('Coach load error:', coachErr);
+    coachData = coach || { name: 'Pol', id: COACH_ID };
 
     // Actualizar UI del coach
-    const initials = getInitials(coach?.name || 'P');
-    document.getElementById('coach-avatar').textContent = initials;
-    document.getElementById('coach-name').textContent   = coach?.name || 'Entrenador';
+    const initials = getInitials(coachData.name || 'P');
+    const avatarEl = document.getElementById('coach-avatar');
+    const nameEl   = document.getElementById('coach-name');
+    if(avatarEl) avatarEl.textContent = initials;
+    if(nameEl)   nameEl.textContent   = coachData.name || 'Entrenador';
 
     // Cargar clientes
     await loadClients();
     showScreen('app');
   } catch(e) {
-    console.error(e);
-    showToast('Error al cargar datos');
-    showScreen('login');
-    showLS('main');
+    console.error('initApp error:', e);
+    showToast('Error al cargar. Recarga la página.');
+    // Mostrar app de todas formas con datos vacíos
+    showScreen('app');
   }
 }
 
@@ -799,7 +802,8 @@ async function loadClients() {
     .eq('coach_id', COACH_ID)
     .order('name');
 
-  if(error || !data) { clients = []; renderSidebar(); return; }
+  if(error) { console.warn('loadClients error:', error); }
+  if(!data) { clients = []; renderSidebar(); return; }
 
   // Para cada cliente, obtener la última sesión
   const enriched = await Promise.all(data.map(async c => {
