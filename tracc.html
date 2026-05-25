@@ -72,7 +72,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 @keyframes _spin{to{transform:rotate(360deg)}}
 
 /* ── APP SHELL ── */
-#screen-app{overflow:hidden;height:100%}
+#screen-app{overflow:hidden}
 .shell{display:flex;height:100vh;width:100%;overflow:hidden}
 .sidebar{width:var(--sidebar);min-width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;transition:width .22s,min-width .22s}
 .sidebar.collapsed{width:56px;min-width:56px}
@@ -247,6 +247,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 <div id="screen-loading" class="screen active">
   <div class="loader"></div>
   <div style="font-size:13px;color:var(--text3);font-weight:500">Cargando Tracc...</div>
+  <div style="font-size:11px;color:var(--text3);margin-top:4px">Conectando con Supabase...</div>
 </div>
 
 <!-- LOGIN -->
@@ -597,10 +598,16 @@ function daysSince(dateStr) {
 
 // ── AUTH ──────────────────────────────────────────────────────────────────
 async function boot() {
-  const { data: { session } } = await sb.auth.getSession();
-  if(session) {
-    await initApp(session.user);
-  } else {
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    if(session) {
+      await initApp(session.user);
+    } else {
+      showScreen('login');
+      showLS('main');
+    }
+  } catch(e) {
+    console.error('boot error:', e);
     showScreen('login');
     showLS('main');
   }
