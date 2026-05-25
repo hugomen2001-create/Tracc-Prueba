@@ -541,8 +541,10 @@ function showToast(msg, dur=3000) {
 }
 
 function showScreen(name) {
+  console.log('showScreen:', name);
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = document.getElementById('screen-' + name);
+  console.log('screen element found:', !!el, el?.className);
   if(el) el.classList.add('active');
 }
 
@@ -777,6 +779,7 @@ async function doLogout() {
 }
 
 async function initApp(user, fromLogin = false) {
+  console.log('initApp start, fromLogin:', fromLogin);
   if(!fromLogin) showScreen('loading');
   try {
     // Cargar datos del coach
@@ -792,12 +795,14 @@ async function initApp(user, fromLogin = false) {
     if(nameEl)   nameEl.textContent   = coachData.name || 'Entrenador';
 
     // Cargar clientes
+    console.log('loadClients done, showing app');
     await loadClients();
+    console.log('clients loaded:', clients.length);
     showScreen('app');
+    console.log('showScreen app called');
   } catch(e) {
     console.error('initApp error:', e);
     showToast('Error al cargar. Recarga la página.');
-    // Mostrar app de todas formas con datos vacíos
     showScreen('app');
   }
 }
