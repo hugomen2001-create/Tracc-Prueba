@@ -1261,30 +1261,51 @@ function buildAlerts(c,completedSessions,cheats,metrics){
 // ── RESUMEN WEEK STRIP ──
 function buildWeekStrip(sessions,split,weekOffset){
   const DAYS_SHORT=['L','M','X','J','V','S','D'];
-  const today=new Date();
-  const todayI=today.getDay()===0?6:today.getDay()-1;
+  const now=new Date();
+  // Strip time for date comparison
+  const todayMidnight=new Date(now.getFullYear(),now.getMonth(),now.getDate());
 
   return DAYS_SHORT.map((dl,i)=>{
-    // Get date for this day
     const wkMon=new Date(getWeekStartOffset(weekOffset)+'T12:00');
     const dayDate=new Date(wkMon);
     dayDate.setDate(wkMon.getDate()+i);
     const dateStr=dayDate.toISOString().slice(0,10);
+    const dayMidnight=new Date(dayDate.getFullYear(),dayDate.getMonth(),dayDate.getDate());
 
-    const sess=split?split[i]:'?';
-    const isOff=!sess||sess==='DESCANSO'||sess==='OFF';
+    const sess=split?split[i]:null;
+    const isOff=!sess||['DESCANSO','OFF','DSC','off','descanso'].includes(sess);
     const session=sessions.find(s=>s.session_date===dateStr);
-    const isPast=dayDate<today&&!isToday(dateStr);
-    const isToday2=isToday(dateStr);
+    const isCompleted=session?.completed;
+    const isTodayDay=dateStr===todayStr();
+    const isPast=dayMidnight<todayMidnight;
+    const isFuture=dayMidnight>todayMidnight;
 
-    let cls='wp pending';
-    let check='○';
-    if(isOff){cls='wp pending';check='—';}
-    else if(session?.completed){cls=weekOffset===0?'wp done':'wp past-done';check='✓';}
-    else if(isPast&&!isOff){cls='wp missed';check='✗';}
-    else if(isToday2&&!isOff){cls='wp today';check='·';}
+    let cls,check;
 
-    return `<div class="${cls}"><div class="wl">${dl}</div><div class="wcheck">${check}</div><div class="ws">${isOff?'DSC':sess}</div></div>`;
+    if(isOff){
+      // Día de descanso
+      if(isPast||isTodayDay){cls='wp done';check='✓';}
+      else{cls='wp pending';check='—';}
+    } else if(isCompleted){
+      // Entrenó
+      cls='wp done';check='✓';
+    } else if(isTodayDay){
+      // Hoy, sin entrenar aún
+      cls='wp today';check='·';
+    } else if(isPast){
+      // Pasado sin entrenar = missed
+      cls='wp missed';check='✗';
+    } else {
+      // Futuro pendiente
+      cls='wp pending';check='○';
+    }
+
+    const label=isOff?'DSC':(sess||'?');
+    return `<div class="${cls}">
+      <div class="wl">${dl}</div>
+      <div class="wcheck">${check}</div>
+      <div class="ws">${label}</div>
+    </div>`;
   }).join('');
 }
 function isToday(dateStr){return dateStr===todayStr();}
@@ -1354,26 +1375,27 @@ function buildResumenContent(c,metrics,sessions,cheats,allSessions,displayMetric
     </div>
   </div>`:`<div class="res-ctitle">Métricas de la semana</div>`;
 
+  const fmtSteps=v=>v?(v>=1000?(v/1000).toFixed(1)+'k':v):'—';
   const metGrid=`<div class="met-grid">
     <div class="met-tile" onclick="openHistoricoModal('pasos')">
       <div class="met-icon">🦶</div>
-      <div class="met-v ${dm.steps&&dm.steps>=8000?'g':''}">${dm.steps?(dm.steps>=1000?(dm.steps/1000).toFixed(1).replace('.','.')+'.000':dm.steps):'—'}</div>
-      <div class="met-lbl">Pasos${isAvg?' media':''} ${metricsDayOffset===0?'hoy':metricsDayOffset===-1?'ayer':''}</div>
+      <div class="met-v ${dm.steps&&dm.steps>=8000?'g':''}">${fmtSteps(dm.steps)}</div>
+      <div class="met-lbl">Pasos${isAvg?' media':''}</div>
     </div>
     <div class="met-tile" onclick="openHistoricoModal('sueno')">
       <div class="met-icon">🌙</div>
       <div class="met-v ${dm.sleep_hours&&dm.sleep_hours>=7?'p':''}">${dm.sleep_hours?dm.sleep_hours+'h':'—'}</div>
       <div class="met-lbl">Sueño${isAvg?' media':''}</div>
     </div>
-    <div class="met-tile">
+    <div class="met-tile" onclick="openHistoricoModal('peso')">
       <div class="met-icon">⚖️</div>
-      <div class="met-v ${dm.weight_kg?'':'am'}">${dm.weight_kg?dm.weight_kg:'—'}</div>
+      <div class="met-v">${dm.weight_kg?dm.weight_kg+' kg':'—'}</div>
       <div class="met-lbl">Peso</div>
     </div>
-    <div class="met-tile">
+    <div class="met-tile" onclick="openHistoricoModal('actividad')">
       <div class="met-icon">⚡</div>
-      <div class="met-v ${dm.activity?'am':''}">${dm.activity||'—'}</div>
-      <div class="met-lbl">Actividades</div>
+      <div class="met-v am" style="font-size:${dm.activity&&isNaN(dm.activity)&&dm.activity.length>4?'14px':'24px'}">${dm.activity||'—'}</div>
+      <div class="met-lbl">Actividad</div>
     </div>
   </div>`;
 
@@ -1414,33 +1436,53 @@ function buildResumenContent(c,metrics,sessions,cheats,allSessions,displayMetric
   if(c._nutrition){
     const np=c._nutrition;
     const opts=c._nutritionOptions||[];
-    const opt=opts[0];
-    const kcalGoal=np.kcal_goal||2000;
-    const totalKcal=opt?Object.values(opt.meals||{}).reduce((a,meal)=>{
-      return a+(meal.items||[]).reduce((s,item)=>s+(item.kcal||0),0);
-    },0):0;
-    const pct=Math.min(totalKcal/kcalGoal*100,100);
-    const mealHtml=opt?Object.entries(opt.meals||{}).map(([meal,data])=>{
-      const kcal=(data.items||[]).reduce((a,it)=>a+(it.kcal||0),0);
-      const itemNames=(data.items||[]).map(i=>i.name).join(' · ');
-      return `<div class="meal-row-r" onclick="openMacrosModal('${meal}',${JSON.stringify(data).replace(/'/g,"\'")})">
-        <div class="meal-icon-r">${MEAL_ICONS[meal]||'🍽️'}</div>
-        <div style="flex:1;min-width:0"><div class="meal-name-r">${meal}</div><div class="meal-items-r">${itemNames}</div></div>
-        <div class="meal-kcal-r">${kcal?kcal+' kcal':''}</div>
+    const kcalGoal=np.kcal_goal||np.calories||2000;
+    const MEAL_ICONS_MAP={Desayuno:'☕',Comida:'🍗',Merienda:'🍎',Cena:'🌙','Pre-cama':'💊','Pre-entreno':'⚡','Post-entreno':'🥛'};
+
+    // Normalizar las opciones: puede ser array de opciones o tener meals directamente
+    // nutrition_options tiene: id, nutrition_plan_id, option_number, name, meals (jsonb)
+    // meals puede ser: {Desayuno:{items:[{name,grams,kcal}]}, ...} o array
+    const opt=opts.length?opts[0]:null;
+    // Usar _normMeals para normalizar cualquier estructura de Supabase
+    let mealsArr=opt&&typeof _normMeals==='function'?_normMeals(opt):[];
+
+    const totalKcal=mealsArr.reduce((a,m)=>{
+      const mk=m.kcal||(m.items||[]).reduce((s,it)=>s+(it.kcal||it.calories||0),0);
+      return a+Math.round(mk);
+    },0);
+    const pct=kcalGoal?Math.min(totalKcal/kcalGoal*100,100):100;
+
+    const mealHtml=mealsArr.length?mealsArr.map(m=>{
+      const mealName=m.name||m.meal||'Comida';
+      const items=m.items||m.foods||[];
+      const mKcal=Math.round(m.kcal||(items.reduce((a,it)=>a+(it.kcal||it.calories||0),0)));
+      const itemNames=items.map(i=>i.name||i.food||'').filter(Boolean).join(' · ');
+      // Serializar data de forma segura para el onclick
+      const safeName=mealName.replace(/'/g,"\'");
+      const safeData=encodeURIComponent(JSON.stringify({items}));
+      return `<div class="meal-row-r" onclick="openMacrosModalEncoded('${safeName}','${safeData}')">
+        <div class="meal-icon-r">${MEAL_ICONS_MAP[mealName]||'🍽️'}</div>
+        <div style="flex:1;min-width:0"><div class="meal-name-r">${mealName}</div>${itemNames?'<div class="meal-items-r">'+itemNames+'</div>':''}</div>
+        <div class="meal-kcal-r">${mKcal?mKcal+' kcal':''}</div>
       </div>`;
-    }).join(''):'<div style="font-size:12px;color:#bbb;padding:10px 0">Sin opciones configuradas</div>';
+    }).join(''):`<div style="font-size:12px;color:#bbb;padding:10px 0">
+      Plan: ${np.name||'Plan activo'}<br>
+      <span style="font-size:10.5px">P:${np.protein_g||'?'}g · C:${np.carbs_g||np.ch_g||'?'}g · G:${np.fat_g||'?'}g</span>
+    </div>`;
+
     dietCard=`<div class="res-card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
         <div class="res-ctitle" style="margin-bottom:0">Dieta${isHistoric?' (plan activo)':' de hoy'}</div>
-        <div style="font-size:12px;font-weight:700;color:var(--green)">${totalKcal||kcalGoal} / ${kcalGoal} kcal</div>
+        <div style="font-size:12px;font-weight:700;color:var(--green)">${np.name||'Plan activo'} · ${kcalGoal} kcal</div>
       </div>
       <div class="diet-bar-r"><div class="diet-fill-r" style="width:${pct}%"></div></div>
-      <div style="font-size:10px;color:#bbb;margin-bottom:8px">${opt?.name||'Plan activo'} · toca una comida para ver macros</div>
+      <div style="font-size:10px;color:#bbb;margin-bottom:8px">P:${np.protein_g||'?'}g · C:${np.carbs_g||np.ch_g||'?'}g · G:${np.fat_g||'?'}g · toca para ver macros</div>
       ${mealHtml}
     </div>`;
   } else {
-    dietCard=`<div class="res-card"><div class="res-ctitle">Dieta de hoy</div><div class="empty-state" style="padding:20px"><div class="empty-sub">Sin plan nutricional · <span style="color:var(--green);cursor:pointer" onclick="showToast('Próximamente')">Crear plan →</span></div></div></div>`;
+    dietCard=`<div class="res-card"><div class="res-ctitle">Dieta de hoy</div><div class="empty-state" style="padding:20px"><div class="empty-sub">Sin plan nutricional configurado</div></div></div>`;
   }
+
 
   // — Cheats card —
   let cheatsCard='';
@@ -1525,205 +1567,302 @@ function switchMetricsDay(offset){
 let _modalChart=null;
 let _modalAllData={};
 
-async function openHistoricoModal(tipo){
-  const c=selectedClient;
-  if(!c)return;
+// ── PERIODOS disponibles ──
+const PERIODS_ALL=['semana','1mes','3meses','6meses','1ano','historico'];
+const PERIODS_LABELS={semana:'Semana','1mes':'1 mes','3meses':'3 meses','6meses':'6 meses','1ano':'1 año','historico':'Histórico'};
 
-  // Fetch all data upfront
+async function openHistoricoModal(tipo){
+  const c=selectedClient;if(!c)return;
+  let data=[];
   if(tipo==='sesiones'){
-    const {data}=await sb.from('workout_sessions').select('session_date,completed').eq('client_id',c.id).order('session_date',{ascending:true});
-    _modalAllData={tipo,data:data||[]};
-    _buildSesionesModal(_modalAllData.data,'semana');
+    const r=await sb.from('workout_sessions').select('session_date,completed').eq('client_id',c.id).order('session_date',{ascending:true});
+    data=r.data||[];
   } else if(tipo==='peso'){
-    const {data}=await sb.from('daily_metrics').select('date,weight_kg').eq('client_id',c.id).not('weight_kg','is',null).order('date',{ascending:true});
-    _modalAllData={tipo,data:data||[]};
-    _buildMetricaModal('peso',_modalAllData.data,'semana');
+    const r=await sb.from('daily_metrics').select('date,weight_kg').eq('client_id',c.id).not('weight_kg','is',null).order('date',{ascending:true});
+    data=r.data||[];
   } else if(tipo==='pasos'){
-    const {data}=await sb.from('daily_metrics').select('date,steps').eq('client_id',c.id).not('steps','is',null).order('date',{ascending:true});
-    _modalAllData={tipo,data:data||[]};
-    _buildMetricaModal('pasos',_modalAllData.data,'semana');
+    const r=await sb.from('daily_metrics').select('date,steps').eq('client_id',c.id).not('steps','is',null).order('date',{ascending:true});
+    data=r.data||[];
   } else if(tipo==='sueno'){
-    const {data}=await sb.from('daily_metrics').select('date,sleep_hours').eq('client_id',c.id).not('sleep_hours','is',null).order('date',{ascending:true});
-    _modalAllData={tipo,data:data||[]};
-    _buildMetricaModal('sueno',_modalAllData.data,'semana');
+    const r=await sb.from('daily_metrics').select('date,sleep_hours').eq('client_id',c.id).not('sleep_hours','is',null).order('date',{ascending:true});
+    data=r.data||[];
   } else if(tipo==='cheats'){
-    const {data}=await sb.from('cheats').select('*').eq('client_id',c.id).order('date',{ascending:false});
-    _modalAllData={tipo,data:data||[]};
-    _buildCheatsModal(_modalAllData.data,'semana');
+    const r=await sb.from('cheats').select('*').eq('client_id',c.id).order('date',{ascending:false});
+    data=r.data||[];
+  } else if(tipo==='actividad'){
+    // Cargar métricas + sesiones para cruzar actividad física real
+    const [mR,sR]=await Promise.all([
+      sb.from('daily_metrics').select('date,activity,activity_details,steps').eq('client_id',c.id).order('date',{ascending:false}).limit(90),
+      sb.from('workout_sessions').select('session_date,session_type,completed').eq('client_id',c.id).eq('completed',true).order('session_date',{ascending:false}).limit(60),
+    ]);
+    data={metrics:mR.data||[],sessions:sR.data||[]};
   }
+  _modalAllData={tipo,data};
+  _openModal(tipo,data,'semana');
 }
 
-function _modalShell(titleHtml,subHtml,tabs,bodyHtml){
+function _getAvailablePeriods(){
+  // Calcula qué periodos están disponibles según antigüedad del cliente
+  const c=selectedClient;
+  const since=c?.member_since?new Date(c.member_since+'T12:00'):null;
+  const now=new Date();
+  const monthsOld=since?((now.getFullYear()-since.getFullYear())*12+(now.getMonth()-since.getMonth())):999;
+  return PERIODS_ALL.filter(p=>{
+    if(p==='1mes')  return monthsOld>=1;
+    if(p==='3meses')return monthsOld>=3;
+    if(p==='6meses')return monthsOld>=6;
+    if(p==='1ano')  return monthsOld>=12;
+    return true; // semana e historico siempre
+  });
+}
+
+function _openModal(tipo,data,period){
   document.getElementById('res-modal-wrap')?.remove();
+  const available=_getAvailablePeriods();
+  // Si el periodo pedido ya no está disponible, usar historico
+  if(!available.includes(period)) period='historico';
+  const tabs=available.map(p=>`<button class="evo-chip${p===period?' on':''}" onclick="_switchModalPeriod('${p}')">${PERIODS_LABELS[p]}</button>`).join('');
+  const META={
+    sesiones:{title:'Sesiones completadas',sub:'Adherencia al plan de entreno'},
+    peso:{title:'Evolución del peso',sub:'Seguimiento · kg'},
+    pasos:{title:'Pasos diarios',sub:'Objetivo: 8.000 pasos/día'},
+    sueno:{title:'Horas de sueño',sub:'Objetivo: 7-9h/noche'},
+    cheats:{title:'Cheats registrados',sub:data.length+' registros en total'},
+    actividad:{title:'⚡ Actividad física',sub:'Registro semanal de actividades del cliente'},
+  };
+  const m=META[tipo]||{title:tipo,sub:''};
+  // Actividad tiene su propio modal sin tabs de periodo
+  if(tipo==='actividad'){
+    _buildActividadModal(data,0);
+    return;
+  }
+  const body=_buildModalBody(tipo,data,period);
   const html=`<div class="res-modal-wrap" id="res-modal-wrap" onclick="if(event.target.id==='res-modal-wrap')closeResModal()">
-    <div class="res-modal" style="width:560px;max-height:88vh">
+    <div class="res-modal" style="width:580px;max-height:90vh">
       <div class="mhd">
-        <div><div class="mtitle">${titleHtml}</div><div class="msub">${subHtml}</div></div>
+        <div><div class="mtitle">${m.title}</div><div class="msub">${m.sub}</div></div>
         <button class="mclose" onclick="closeResModal()">✕</button>
       </div>
-      <div style="display:flex;gap:6px;padding:10px 20px;border-bottom:1.5px solid #eaeae6;flex-shrink:0">${tabs}</div>
-      <div class="mbody" id="modal-body-inner">${bodyHtml}</div>
+      <div style="display:flex;gap:5px;padding:10px 20px;border-bottom:1.5px solid #eaeae6;flex-shrink:0;flex-wrap:wrap">${tabs}</div>
+      <div class="mbody" id="modal-body-inner">${body}</div>
     </div>
   </div>`;
   document.body.insertAdjacentHTML('beforeend',html);
-}
-
-function _periodTabs(tipo,active){
-  const periods=tipo==='sesiones'?['semana','mes','historico']:tipo==='sueno'?['semana','mes']:['semana','mes','historico'];
-  const labels={semana:'Semana',mes:'Mes',historico:'Histórico'};
-  return periods.map(p=>`<button class="evo-chip${p===active?' on':''}" onclick="_switchModalPeriod('${p}')">${labels[p]}</button>`).join('');
+  _renderModalChart(tipo,data,period);
 }
 
 function _switchModalPeriod(period){
   const {tipo,data}=_modalAllData;
+  const available=_getAvailablePeriods();
+  if(!available.includes(period)) return;
   document.querySelectorAll('#res-modal-wrap .evo-chip').forEach(b=>{
-    b.classList.toggle('on',b.textContent==={semana:'Semana',mes:'Mes',historico:'Histórico'}[period]);
+    b.classList.toggle('on',b.textContent===PERIODS_LABELS[period]);
   });
-  if(_modalChart){_modalChart.destroy();_modalChart=null;}
-  let body='';
-  if(tipo==='sesiones') body=_sesionesBody(data,period);
-  else if(tipo==='cheats') body=_cheatsBody(data,period);
-  else body=_metricaBody(tipo,data,period);
-  document.getElementById('modal-body-inner').innerHTML=body;
+  if(_modalChart){try{_modalChart.destroy();}catch(e){}  _modalChart=null;}
+  document.getElementById('modal-body-inner').innerHTML=_buildModalBody(tipo,data,period);
   _renderModalChart(tipo,data,period);
 }
 
-/* ── SESIONES ── */
-function _buildSesionesModal(data,period){
-  const tabs=_periodTabs('sesiones',period);
-  const body=_sesionesBody(data,period);
-  _modalShell('Sesiones completadas','Adherencia al plan de entreno',tabs,body);
-  _renderModalChart('sesiones',data,period);
+// ── BODY BUILDER ──
+function _buildModalBody(tipo,data,period){
+  if(tipo==='sesiones') return _sesionesBody(data,period);
+  if(tipo==='cheats') return _cheatsBody(data,period);
+  return _metricaBody(tipo,data,period);
 }
 
+// ── FILTRA DATOS POR PERIODO ──
+function _filterByPeriod(data,dateField,period){
+  const now=new Date();
+  const cutoff=new Date(now);
+  if(period==='semana'){const ws=getWeekStart();return data.filter(d=>d[dateField]>=ws);}
+  if(period==='1mes'){cutoff.setDate(now.getDate()-30);}
+  else if(period==='3meses'){cutoff.setMonth(now.getMonth()-3);}
+  else if(period==='6meses'){cutoff.setMonth(now.getMonth()-6);}
+  else if(period==='1ano'){cutoff.setFullYear(now.getFullYear()-1);}
+  else return data; // historico
+  return data.filter(d=>d[dateField]>=cutoff.toISOString().slice(0,10));
+}
+
+// ── AGRUPA PARA GRÁFICO según periodo ──
+// Para semana: puntos diarios (L,M,X,J,V,S,D)
+// Para 1mes: puntos diarios (solo los que tienen dato, últimas 4 semanas)
+// Para 3meses+: medias semanales agrupadas por mes (labels = mes, tooltips = semana)
+function _getChartData(tipo,allData,period){
+  const field=tipo==='peso'?'weight_kg':tipo==='pasos'?'steps':tipo==='sueno'?'sleep_hours':null;
+  const dateField=tipo==='sesiones'?'session_date':'date';
+  const DAYS_SHORT=['L','M','X','J','V','S','D'];
+  const MES_LABEL=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+  if(period==='semana'){
+    const wStart=getWeekStart();
+    if(tipo==='sesiones'){
+      const labels=DAYS_SHORT;
+      const values=DAYS_SHORT.map((_,i)=>{
+        const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);
+        const ds=d.toISOString().slice(0,10);
+        return allData.filter(s=>s.session_date===ds&&s.completed).length;
+      });
+      return {labels,values,type:'bar'};
+    } else if(tipo==='cheats'){
+      const labels=DAYS_SHORT;
+      const values=DAYS_SHORT.map((_,i)=>{
+        const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);
+        return allData.filter(c=>c.date===d.toISOString().slice(0,10)).length;
+      });
+      return {labels,values,type:'bar'};
+    } else {
+      const labels=DAYS_SHORT;
+      const values=DAYS_SHORT.map((_,i)=>{
+        const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);
+        const ds=d.toISOString().slice(0,10);
+        const m=allData.find(r=>r.date===ds);
+        return m?m[field]:null;
+      });
+      return {labels,values,type:tipo==='peso'?'line':'bar'};
+    }
+  }
+
+  if(period==='1mes'){
+    // Ultimos 30 dias, puntos diarios
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-29);
+    const cutStr=cutoff.toISOString().slice(0,10);
+    if(tipo==='sesiones'){
+      const byWeek=_groupByWeek(allData.filter(d=>d.session_date>=cutStr),'session_date',null,d=>d.completed?1:0);
+      const weeks=Object.keys(byWeek).sort();
+      return {labels:weeks.map(w=>'S·'+fmtDateShort(w)),values:weeks.map(w=>byWeek[w].sum),type:'bar'};
+    } else if(tipo==='cheats'){
+      const filtered=allData.filter(c=>c.date>=cutStr);
+      const byWeek=_groupByWeekCount(filtered,'date');
+      const weeks=Object.keys(byWeek).sort();
+      return {labels:weeks.map(w=>'S·'+fmtDateShort(w)),values:weeks.map(w=>byWeek[w]||0),type:'bar'};
+    } else {
+      const filtered=allData.filter(r=>r.date>=cutStr);
+      const byWeek=_groupByWeek(filtered,'date',field);
+      const weeks=Object.keys(byWeek).sort();
+      return {labels:weeks.map(w=>'S·'+fmtDateShort(w)),values:weeks.map(w=>parseFloat(byWeek[w].avg)||0),type:tipo==='peso'?'line':'bar'};
+    }
+  }
+
+  // 3meses / 6meses / 1ano / historico:
+  // Mostrar TODAS las semanas como columnas individuales.
+  // El eje X muestra el mes cuando cambia, ocupando tantas columnas como semanas tenga ese mes.
+  // Esto se logra con Chart.js usando labels vacíos para semanas intermedias y el mes en la primera semana del mes.
+  const dateFieldForFilter=tipo==='sesiones'?'session_date':'date';
+  const filtered2=_filterByPeriod(
+    tipo==='sesiones'?allData.map(d=>({...d,date:d.session_date})):allData,
+    'date',period
+  );
+  const byWeek2=tipo==='sesiones'
+    ?_groupByWeek(filtered2,'date',null,d=>d.completed?1:0)
+    :tipo==='cheats'
+    ?_groupByWeekCount(filtered2,'date')
+    :_groupByWeek(filtered2,'date',field);
+  const weeks2=Object.keys(byWeek2).sort();
+  if(!weeks2.length) return {labels:[],values:[],type:'bar'};
+
+  // Construir labels: primer semana de cada mes = "Ene", resto = ""
+  let lastMonth='';
+  const labels=weeks2.map(w=>{
+    const mo=w.slice(0,7);
+    if(mo!==lastMonth){
+      lastMonth=mo;
+      const [y,m]=mo.split('-');
+      return MES_LABEL[parseInt(m)-1]+(period==='1ano'||period==='historico'?` '${y.slice(2)}`:'');
+    }
+    return '';
+  });
+  const values=weeks2.map(w=>{
+    if(tipo==='sesiones') return byWeek2[w].sum||0;
+    if(tipo==='cheats') return byWeek2[w]||0;
+    return parseFloat(byWeek2[w].avg)||0;
+  });
+  const weekTooltips=weeks2.map(w=>fmtDateRange(w,_addDays(w,6)));
+  return {labels,values,type:tipo==='peso'?'line':'bar',weekTooltips};
+}
+
+// ── SESIONES BODY ──
 function _sesionesBody(data,period){
   const byWeek=_groupByWeek(data,'session_date',null,d=>d.completed?1:0);
   const weeks=Object.keys(byWeek).sort();
-  const trainGoal=selectedClient?((selectedClient._split||[]).filter(s=>s&&s!=='DESCANSO'&&s!=='OFF').length||4):4;
+  const trainGoal=selectedClient&&selectedClient._split?selectedClient._split.filter(s=>s&&s!=='DESCANSO'&&s!=='OFF').length:4;
+  const goal=trainGoal||4;
 
-  let rows='';
-  if(period==='semana'||period==='mes'){
-    const slice=period==='semana'?weeks.slice(-1):weeks.slice(-4);
-    rows=slice.reverse().map((w,i)=>{
-      const done=byWeek[w].sum;const isCurrent=i===0&&period==='semana';
-      const wEnd=_addDays(w,6);
-      return `<div class="hist-row${isCurrent?' current':''}">
-        <div><div class="hist-wk" style="margin-bottom:3px">${isCurrent?'Esta semana':'Sem. '+fmtDateRange(w,wEnd)}</div>
-        <div style="height:4px;width:${Math.min(done/trainGoal*100,100)}%;background:${done>=trainGoal?'var(--green)':done>=2?'#f59e0b':'var(--red)'};border-radius:2px;margin-top:4px"></div></div>
-        <div style="text-align:right">
-          <div class="hist-val" style="color:${done>=trainGoal?'var(--green)':done>=2?'#f59e0b':'var(--red)'}">${done}/${trainGoal}</div>
-          <div class="hist-sub">${done>=trainGoal?'Semana completa ✓':done+' sesiones'}</div>
-        </div>
-      </div>`;
-    }).join('');
-  } else {
-    // historico — tabla completa
-    const total=weeks.reduce((a,w)=>a+byWeek[w].sum,0);
-    const completas=weeks.filter(w=>byWeek[w].sum>=trainGoal).length;
-    rows=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
-      <div class="hist-row" style="flex-direction:column;align-items:center;text-align:center;padding:12px 8px">
-        <div class="hist-val" style="color:var(--green)">${total}</div><div class="hist-sub">sesiones totales</div>
+  const filtered=_filterByPeriod(data,'session_date',period);
+  const filteredByWeek=_groupByWeek(filtered,'session_date',null,d=>d.completed?1:0);
+  const filteredWeeks=Object.keys(filteredByWeek).sort().reverse();
+  const total=filteredWeeks.reduce((a,w)=>a+filteredByWeek[w].sum,0);
+  const completas=filteredWeeks.filter(w=>filteredByWeek[w].sum>=goal).length;
+
+  const statsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:0 0 14px">
+    <div style="background:#f0fdf4;border:1.5px solid rgba(22,163,74,.15);border-radius:13px;padding:12px;text-align:center">
+      <div style="font-family:var(--serif);font-size:22px;color:var(--green);letter-spacing:-.5px">${total}</div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">SESIONES</div>
+    </div>
+    <div style="background:#f5f5f3;border-radius:13px;padding:12px;text-align:center">
+      <div style="font-family:var(--serif);font-size:22px;color:#111;letter-spacing:-.5px">${filteredWeeks.length}</div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">SEMANAS</div>
+    </div>
+    <div style="background:#f5f5f3;border-radius:13px;padding:12px;text-align:center">
+      <div style="font-family:var(--serif);font-size:22px;color:var(--green);letter-spacing:-.5px">${filteredWeeks.length?Math.round(completas/filteredWeeks.length*100):0}%</div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">ADHERENCIA</div>
+    </div>
+  </div>`;
+
+  const listHtml=filteredWeeks.slice(0,6).map((w,i)=>{
+    const done=filteredByWeek[w].sum;const isCurrent=i===0&&period==='semana';
+    return `<div class="hist-row${isCurrent?' current':''}">
+      <div style="flex:1">
+        <div class="hist-wk">${isCurrent?'Esta semana':fmtDateRange(w,_addDays(w,6))}</div>
+        <div style="height:3px;width:${Math.min(done/goal*100,100)}%;background:${done>=goal?'var(--green)':done>=2?'#f59e0b':'var(--red)'};border-radius:2px;margin-top:5px"></div>
       </div>
-      <div class="hist-row" style="flex-direction:column;align-items:center;text-align:center;padding:12px 8px">
-        <div class="hist-val">${weeks.length}</div><div class="hist-sub">semanas</div>
+      <div style="text-align:right;margin-left:12px">
+        <div class="hist-val" style="color:${done>=goal?'var(--green)':done>=2?'#f59e0b':'var(--red)'}">${done}/${goal}</div>
+        <div class="hist-sub">${done>=goal?'✓ Completa':done+' sesiones'}</div>
       </div>
-      <div class="hist-row" style="flex-direction:column;align-items:center;text-align:center;padding:12px 8px">
-        <div class="hist-val" style="color:var(--green)">${Math.round(completas/weeks.length*100)||0}%</div><div class="hist-sub">adherencia</div>
-      </div>
-    </div>`+weeks.slice().reverse().slice(0,8).map((w,i)=>{
-      const done=byWeek[w].sum;
-      return `<div class="hist-row${i===0?' current':''}">
-        <div><div class="hist-wk">Sem. ${fmtDateRange(w,_addDays(w,6))}</div></div>
-        <div style="text-align:right"><div class="hist-val" style="color:${done>=trainGoal?'var(--green)':done>=2?'#f59e0b':'var(--red)'};font-size:16px">${done}/${trainGoal}</div><div class="hist-sub">${done>=trainGoal?'✓ Completa':done+' sesiones'}</div></div>
-      </div>`;
-    }).join('');
-  }
-  return `<canvas id="modal-chart" style="margin-bottom:16px;max-height:200px"></canvas>${rows}`;
+    </div>`;
+  }).join('');
+
+  return `<canvas id="modal-chart" style="margin-bottom:16px;max-height:180px"></canvas>${statsHtml}${listHtml}`;
 }
 
-/* ── MÉTRICA GENÉRICA (peso / pasos / sueño) ── */
-function _buildMetricaModal(tipo,data,period){
-  const META={peso:{title:'Evolución del peso',unit:'kg',color:'#16a34a',sub:'Seguimiento semanal · kg'},
-    pasos:{title:'Pasos diarios',unit:'',color:'#3b82f6',sub:'Objetivo: 8.000 pasos/día'},
-    sueno:{title:'Horas de sueño',unit:'h',color:'#7c3aed',sub:'Objetivo: 7-9h/noche'}};
-  const m=META[tipo];
-  const tabs=_periodTabs(tipo,period);
-  const body=_metricaBody(tipo,data,period);
-  _modalShell(m.title,m.sub,tabs,body);
-  _renderModalChart(tipo,data,period);
-}
-
+// ── MÉTRICA BODY (peso/pasos/sueño) ──
 function _metricaBody(tipo,data,period){
   const field=tipo==='peso'?'weight_kg':tipo==='pasos'?'steps':'sleep_hours';
   const unit=tipo==='peso'?' kg':tipo==='sueno'?'h':'';
   const dec=tipo==='pasos'?0:1;
-  const fmt=v=>tipo==='pasos'?(v>=1000?(v/1000).toFixed(1)+'k':v):parseFloat(v).toFixed(dec);
+  const fmtV=v=>v===null||v===undefined?'—':(tipo==='pasos'&&v>=1000?(v/1000).toFixed(1)+'k':parseFloat(v).toFixed(dec)+unit);
 
-  let vals=[];
-  if(period==='semana'){
-    const wStart=getWeekStart();
-    const DAYS_SH=['L','M','X','J','V','S','D'];
-    // All 7 days of current week
-    const today=new Date();
-    vals=DAYS_SH.map((_,i)=>{
-      const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);
-      const ds=d.toISOString().slice(0,10);
-      const m=data.find(r=>r.date===ds);
-      return {lbl:DAYS_SH[i],v:m?m[field]:null,date:ds};
-    });
-  } else if(period==='mes'){
-    // Last 30 days grouped by day
-    const end=new Date();const start=new Date();start.setDate(end.getDate()-29);
-    vals=data.filter(r=>r.date>=start.toISOString().slice(0,10)).map(r=>({lbl:r.date.slice(5),v:r[field],date:r.date}));
-  } else {
-    // Histórico por semana
-    const byWeek=_groupByWeek(data,'date',field);
-    const weeks=Object.keys(byWeek).sort().slice(-20);
-    vals=weeks.map((w,i)=>({lbl:'S'+(i+1),v:byWeek[w].avg,date:w}));
-  }
+  const filtered=_filterByPeriod(data,'date',period);
+  const vals=filtered.map(d=>d[field]).filter(v=>v!==null&&v!==undefined);
+  const avg=vals.length?+(vals.reduce((a,v)=>a+v,0)/vals.length).toFixed(dec):null;
+  const max=vals.length?Math.max(...vals):null;
+  const min=vals.length?Math.min(...vals):null;
+  const COLOR={peso:'var(--green)',pasos:'#3b82f6',sueno:'#7c3aed'};
 
-  const withVal=vals.filter(v=>v.v!==null);
-  const avg=withVal.length?+(withVal.reduce((a,v)=>a+v.v,0)/withVal.length).toFixed(dec):0;
-  const max=withVal.length?Math.max(...withVal.map(v=>v.v)):0;
-  const min=withVal.length?Math.min(...withVal.map(v=>v.v)):0;
-
-  const statsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:16px">
+  const statsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px">
     <div style="background:#f5f5f3;border-radius:13px;padding:12px;text-align:center">
-      <div style="font-family:var(--serif);font-size:22px;color:${tipo==='peso'?'var(--green)':tipo==='pasos'?'#3b82f6':'#7c3aed'};letter-spacing:-.5px">${fmt(avg)}${unit}</div>
+      <div style="font-family:var(--serif);font-size:22px;color:${COLOR[tipo]};letter-spacing:-.5px">${fmtV(avg)}</div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">MEDIA</div>
     </div>
     <div style="background:#f5f5f3;border-radius:13px;padding:12px;text-align:center">
-      <div style="font-family:var(--serif);font-size:22px;color:#111;letter-spacing:-.5px">${fmt(max)}${unit}</div>
+      <div style="font-family:var(--serif);font-size:22px;color:#111;letter-spacing:-.5px">${fmtV(max)}</div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">MÁXIMO</div>
     </div>
     <div style="background:#f5f5f3;border-radius:13px;padding:12px;text-align:center">
-      <div style="font-family:var(--serif);font-size:22px;color:#111;letter-spacing:-.5px">${fmt(min)}${unit}</div>
+      <div style="font-family:var(--serif);font-size:22px;color:#111;letter-spacing:-.5px">${fmtV(min)}</div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">MÍNIMO</div>
     </div>
   </div>`;
 
-  return `<canvas id="modal-chart" style="max-height:220px"></canvas>${statsHtml}`;
+  return `<canvas id="modal-chart" style="max-height:200px"></canvas>${statsHtml}`;
 }
 
-/* ── CHEATS ── */
-function _buildCheatsModal(data,period){
-  const tabs=_periodTabs('cheats',period);
-  const body=_cheatsBody(data,period);
-  _modalShell('Cheats registrados',data.length+' registros en total',tabs,body);
-  _renderModalChart('cheats',data,period);
-}
-
+// ── CHEATS BODY ──
 function _cheatsBody(data,period){
-  let filtered=data;
-  if(period==='semana'){
-    const wStart=getWeekStart();
-    filtered=data.filter(c=>c.date>=wStart);
-  } else if(period==='mes'){
-    const d=new Date();d.setDate(d.getDate()-30);
-    filtered=data.filter(c=>c.date>=d.toISOString().slice(0,10));
-  }
+  const filtered=_filterByPeriod(data,'date',period).slice().sort((a,b)=>b.date.localeCompare(a.date));
   const totalKcal=filtered.reduce((a,c)=>a+(c.kcal_estimate||0),0);
-  const statsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:16px 0 12px">
+
+  const statsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:0 0 12px">
     <div style="background:#fff7ed;border:1.5px solid rgba(249,115,22,.15);border-radius:13px;padding:12px;text-align:center">
       <div style="font-family:var(--serif);font-size:22px;color:#f97316;letter-spacing:-.5px">${filtered.length}</div>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">CHEATS</div>
@@ -1739,115 +1878,243 @@ function _cheatsBody(data,period){
   </div>`;
 
   const listHtml=filtered.length?filtered.slice(0,8).map(c=>`<div class="hist-row">
-    <div><div class="hist-wk">${fmtDate(c.date)}${c.time_of_day?' · '+c.time_of_day:''}</div>
-    <div style="font-size:12px;color:#111;margin-top:3px;font-weight:600">${c.description||'—'}</div>
-    ${c.ch||c.protein?`<div style="font-size:10px;color:#bbb;margin-top:2px">CH ${c.ch||0}g · G ${c.fat||0}g · P ${c.protein||0}g</div>`:''}
+    <div style="flex:1;min-width:0">
+      <div class="hist-wk">${fmtDate(c.date)}${c.time_of_day?' · '+c.time_of_day:''}</div>
+      <div style="font-size:12px;color:#111;margin-top:3px;font-weight:600">${c.description||'—'}</div>
     </div>
     <div style="text-align:right;flex-shrink:0;margin-left:12px">
-      <div class="hist-val" style="font-size:16px;color:#f97316">${c.kcal_estimate?'~'+c.kcal_estimate:''}</div>
+      <div style="font-family:var(--serif);font-size:16px;color:#f97316">${c.kcal_estimate?'~'+c.kcal_estimate:''}</div>
       <div class="hist-sub">${c.kcal_estimate?'kcal':''}</div>
     </div>
-  </div>`).join(''):`<div style="text-align:center;padding:24px;color:#bbb;font-size:13px">${period==='semana'?'🌿 Semana limpia — sin cheats':'Sin cheats en este periodo'}</div>`;
+  </div>`).join(''):`<div style="text-align:center;padding:28px;color:#bbb;font-size:13px">🌿 Sin cheats en este periodo</div>`;
 
-  return `<canvas id="modal-chart" style="max-height:160px"></canvas>${statsHtml}${listHtml}`;
+  return `<canvas id="modal-chart" style="max-height:150px"></canvas>${statsHtml}${listHtml}`;
 }
 
-/* ── CHART RENDERER ── */
+// ── ACTIVIDAD MODAL ──
+let _actWeekOffset=0;
+
+function _parseActivityDetails(details){
+  if(!details) return [];
+  if(Array.isArray(details)) return details;
+  if(typeof details==='string'){
+    try{const p=JSON.parse(details);return Array.isArray(p)?p:[];}catch{return [];}
+  }
+  return [];
+}
+
+function _buildActividadModal(allData,weekOffset){
+  _actWeekOffset=weekOffset;
+  const wStart=getWeekStartOffset(weekOffset);
+  const wEnd=getWeekEndOffset(weekOffset);
+  const isCurrentWeek=weekOffset===0;
+
+  const DAYS_FULL=['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+  const ACT_ICONS={'fútbol':'⚽','futbol':'⚽','padel':'🎾','pádel':'🎾','tenis':'🎾','correr':'🏃','running':'🏃','caminar':'🚶','ciclismo':'🚴','bici':'🚴','natación':'🏊','swim':'🏊','yoga':'🧘','gym':'💪','crossfit':'🏋️','senderismo':'🥾','esquí':'⛷️','surf':'🏄','partido':'⚽','baloncesto':'🏀','basket':'🏀','volei':'🏐','voléibol':'🏐','boxeo':'🥊','pilates':'🧘','atletismo':'🏃','triatlón':'🏊','fútbol sala':'⚽'};
+  const SESSION_ICONS={'LEG':'🦵','PUSH':'💪','PULL':'🔝','TORSO':'🏋️','FULL':'💪','CARDIO':'🏃','HIIT':'⚡'};
+
+  // Separar datos combinados
+  const metrics=Array.isArray(allData)?allData:(allData.metrics||[]);
+  const sessions=Array.isArray(allData)?[]:(allData.sessions||[]);
+
+  // Filtrar semana
+  const weekMetrics=metrics.filter(d=>d.date>=wStart&&d.date<=wEnd);
+  const weekSessions=sessions.filter(s=>s.session_date>=wStart&&s.session_date<=wEnd);
+
+  // Stats: combinar activity_details + sessions
+  let totalActs=0,totalMins=0,totalKcal=0;
+  weekMetrics.forEach(d=>{
+    const details=_parseActivityDetails(d.activity_details);
+    if(details.length){
+      details.forEach(a=>{totalActs++;totalMins+=(a.duration_min||0);totalKcal+=(a.kcal||0);});
+    }
+  });
+  // Sumar sesiones de gym si no están ya en activity_details
+  totalActs+=weekSessions.length;
+
+  const statsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+    <div style="background:#fef3c7;border:1.5px solid rgba(245,158,11,.2);border-radius:13px;padding:12px;text-align:center">
+      <div style="font-family:var(--serif);font-size:26px;color:#d97706;letter-spacing:-.5px">${totalActs}</div>
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">ACTIVIDADES</div>
+    </div>
+    <div style="background:#f5f5f3;border-radius:13px;padding:12px;text-align:center">
+      <div style="font-family:var(--serif);font-size:26px;color:#111;letter-spacing:-.5px">${totalMins||'—'}</div>
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">MINUTOS</div>
+    </div>
+    <div style="background:#f0fdf4;border:1.5px solid rgba(22,163,74,.15);border-radius:13px;padding:12px;text-align:center">
+      <div style="font-family:var(--serif);font-size:26px;color:var(--green);letter-spacing:-.5px">${totalKcal||'—'}</div>
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#bbb;margin-top:3px">KCAL QUEMADAS</div>
+    </div>
+  </div>`;
+
+  // Días de la semana
+  const daysHtml=DAYS_FULL.map((dayName,i)=>{
+    const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);
+    const ds=d.toISOString().slice(0,10);
+    const dayMet=weekMetrics.find(m=>m.date===ds);
+    const daySess=weekSessions.filter(s=>s.session_date===ds);
+
+    // Actividades físicas del día (activity_details)
+    const acts=_parseActivityDetails(dayMet?.activity_details);
+
+    // Si no hay nada en ningún lado
+    if(!acts.length&&!daySess.length){
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f5f5f3">
+        <div style="font-size:12px;font-weight:600;color:#bbb">${dayName}</div>
+        <div style="font-size:11px;color:#c0c0bc">Sin actividad</div>
+      </div>`;
+    }
+
+    // Renderizar sesiones de gym
+    const sessHtml=daySess.map(s=>{
+      const icon=SESSION_ICONS[s.session_type]||'🏋️';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0">
+        <div style="width:28px;height:28px;border-radius:8px;background:#f0fdf4;border:1.5px solid rgba(22,163,74,.15);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${icon}</div>
+        <div style="flex:1"><div style="font-size:12px;font-weight:600;color:#111">${s.session_type}</div><div style="font-size:10.5px;color:#bbb">Sesión de gym · completada</div></div>
+        <div style="font-size:10px;font-weight:700;color:var(--green);padding:2px 7px;border-radius:6px;background:#f0fdf4">✓</div>
+      </div>`;
+    }).join('');
+
+    // Renderizar actividades físicas
+    const actsHtml=acts.map(a=>{
+      const name=(a.name||a.type||'Actividad');
+      const nameLow=name.toLowerCase();
+      const icon=Object.entries(ACT_ICONS).find(([k])=>nameLow.includes(k))?.[1]||'⚡';
+      const kcal=a.kcal||a.calories||0;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0">
+        <div style="width:28px;height:28px;border-radius:8px;background:#f5f5f3;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;color:#111">${name}</div>
+          ${a.duration_min?`<div style="font-size:10.5px;color:#bbb">${a.duration_min} min${kcal?' · -'+kcal+' kcal':''}</div>`:''}
+        </div>
+        ${kcal&&!a.duration_min?`<div style="font-size:11px;font-weight:700;color:#ef4444">-${kcal} kcal</div>`:''}
+      </div>`;
+    }).join('');
+
+    return `<div style="padding:9px 0;border-bottom:1px solid #f5f5f3">
+      <div style="font-size:12px;font-weight:700;color:#1a1a18;margin-bottom:4px">${dayName}</div>
+      ${sessHtml}${actsHtml}
+    </div>`;
+  }).join('');
+
+  const navBtns=`<div style="display:flex;align-items:center;gap:8px">
+    <button onclick="_actNav(-1)" style="height:28px;padding:0 12px;border-radius:8px;border:1.5px solid #eaeae6;background:#fff;font-size:11px;font-weight:600;color:#888;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:4px">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      Semana anterior
+    </button>
+    ${!isCurrentWeek?`<button onclick="_actNav(1)" style="height:28px;padding:0 12px;border-radius:8px;border:none;background:#1a1a18;font-size:11px;font-weight:600;color:#fff;cursor:pointer;font-family:var(--font)">Esta semana</button>`:''}
+  </div>`;
+
+  const weekLabel=isCurrentWeek?'Esta semana':fmtDateRange(wStart,wEnd);
+  const html=`<div class="res-modal-wrap" id="res-modal-wrap" onclick="if(event.target.id==='res-modal-wrap')closeResModal()">
+    <div class="res-modal" style="width:500px;max-height:88vh">
+      <div class="mhd">
+        <div><div class="mtitle">⚡ Actividad física</div><div class="msub">Registro semanal de actividades del cliente</div></div>
+        <button class="mclose" onclick="closeResModal()">✕</button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 20px 10px;border-bottom:1.5px solid #eaeae6;flex-shrink:0">
+        ${navBtns}
+        <div style="font-size:12px;font-weight:600;color:#111">${weekLabel}</div>
+      </div>
+      <div class="mbody">${statsHtml}${daysHtml}</div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+}
+
+function _actNav(delta){
+  if(!_modalAllData.data)return;
+  _actWeekOffset+=delta;
+  if(_actWeekOffset>0)_actWeekOffset=0;
+  closeResModal();
+  _buildActividadModal(_modalAllData.data,_actWeekOffset);
+}
+
+// ── CHART RENDERER ──
+function _chartOpts(unit,minY,maxY,tooltips){
+  const opts={
+    responsive:true,maintainAspectRatio:true,
+    plugins:{legend:{display:false},tooltip:{callbacks:{
+      title:ctx=>tooltips?tooltips[ctx[0].dataIndex]:ctx[0].label,
+      label:ctx=>ctx.parsed.y!==null?' '+ctx.parsed.y+(unit||''):' sin dato'
+    }}},
+    scales:{
+      x:{grid:{display:false},ticks:{font:{size:10,family:"'DM Sans',sans-serif"},color:'#aaa',maxRotation:0}},
+      y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{font:{size:9,family:"'DM Sans',sans-serif"},color:'#bbb'},border:{display:false}}
+    }
+  };
+  if(minY!==null&&minY!==undefined) opts.scales.y.min=minY;
+  if(maxY!==null&&maxY!==undefined) opts.scales.y.max=maxY;
+  return opts;
+}
+
 function _renderModalChart(tipo,data,period){
   requestAnimationFrame(()=>{
     const canvas=document.getElementById('modal-chart');
     if(!canvas)return;
-    if(_modalChart){_modalChart.destroy();_modalChart=null;}
-
-    const COLORS={peso:'#16a34a',pasos:'#3b82f6',sueno:'#7c3aed',sesiones:'#16a34a',cheats:'#f97316'};
+    if(_modalChart){try{_modalChart.destroy();}catch(e){} _modalChart=null;}
+    const COLORS={peso:'#16a34a',pasos:'#3b82f6',sueno:'#7c3aed',sesiones:'#16a34a',cheats:'#ef4444'};
     const color=COLORS[tipo]||'#16a34a';
 
-    let labels=[],values=[],nullMask=[];
+    try{
+      const chartResult=_getChartData(tipo,data,period);
+      const {labels,values,type}=chartResult;
+      const weekTooltips=chartResult.weekTooltips||null;
+      if(!labels.length)return;
 
-    if(tipo==='sesiones'){
-      const byWeek=_groupByWeek(data,'session_date',null,d=>d.completed?1:0);
-      const weeks=Object.keys(byWeek).sort();
-      const slice=period==='semana'?weeks.slice(-1):period==='mes'?weeks.slice(-4):weeks.slice(-12);
-      const trainGoal=selectedClient?((selectedClient._split||[]).filter(s=>s&&s!=='DESCANSO'&&s!=='OFF').length||4):4;
-      labels=slice.map((w,i)=>'S'+(weeks.indexOf(w)+1));
-      values=slice.map(w=>byWeek[w].sum);
-      _modalChart=new Chart(canvas,{type:'bar',data:{labels,datasets:[{data:values,backgroundColor:values.map(v=>v>=trainGoal?'rgba(22,163,74,.75)':v>=2?'rgba(245,158,11,.75)':'rgba(239,68,68,.6)'),borderRadius:6,borderSkipped:false}]},options:_chartOpts('Sesiones',null,'#1a1a18')});
+      const isLarge=period==='3meses'||period==='6meses'||period==='1ano'||period==='historico';
+      const trainGoal=selectedClient&&selectedClient._split?selectedClient._split.filter(s=>s&&s!=='DESCANSO'&&s!=='OFF').length:4;
+      const goal=trainGoal||4;
 
-    } else if(tipo==='peso'){
-      if(period==='semana'){
-        const wStart=getWeekStart();
-        const DAYS=['L','M','X','J','V','S','D'];
-        labels=DAYS;
-        values=DAYS.map((_,i)=>{const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);const ds=d.toISOString().slice(0,10);const m=data.find(r=>r.date===ds);return m?m.weight_kg:null;});
-        const allVals=values.filter(v=>v!==null);
-        const minV=allVals.length?Math.min(...allVals)-0.5:null;
-        const maxV=allVals.length?Math.max(...allVals)+0.5:null;
-        _modalChart=new Chart(canvas,{type:'line',data:{labels,datasets:[{data:values,borderColor:color,backgroundColor:color+'22',fill:true,tension:0.3,pointBackgroundColor:color,pointRadius:values.map(v=>v!==null?4:0),spanGaps:false}]},options:_chartOpts('kg',minV,maxV)});
+      if(type==='line'){
+        const allVals=values.filter(v=>v!==null&&v!==undefined&&v>0);
+        const minV=allVals.length?parseFloat((Math.min(...allVals)-0.3).toFixed(1)):0;
+        const maxV=allVals.length?parseFloat((Math.max(...allVals)+0.3).toFixed(1)):null;
+        _modalChart=new Chart(canvas,{
+          type:'line',
+          data:{labels,datasets:[{
+            data:values,borderColor:color,backgroundColor:color+'15',fill:true,
+            tension:0.35,pointBackgroundColor:color,pointBorderColor:'#fff',
+            pointBorderWidth:2,pointRadius:values.map(v=>v!==null&&v>0?4:0),spanGaps:false
+          }]},
+          options:_chartOpts(' kg',minV,maxV,weekTooltips)
+        });
       } else {
-        const field='weight_kg';
-        const byWeek=_groupByWeek(data,'date',field);
-        const weeks=Object.keys(byWeek).sort();
-        const slice=period==='mes'?weeks.slice(-4):weeks.slice(-20);
-        labels=slice.map((w,i)=>'S'+(weeks.indexOf(w)+1));
-        values=slice.map(w=>byWeek[w].avg);
-        const minV=Math.min(...values)-0.5;const maxV=Math.max(...values)+0.5;
-        _modalChart=new Chart(canvas,{type:'line',data:{labels,datasets:[{data:values,borderColor:color,backgroundColor:color+'22',fill:true,tension:0.3,pointBackgroundColor:color,pointRadius:4}]},options:_chartOpts('kg',minV,maxV)});
-      }
+        // Bar chart
+        let bgColors;
+        if(tipo==='sesiones'){
+          bgColors=values.map(v=>v>=goal?'rgba(22,163,74,.8)':v>=Math.ceil(goal/2)?'rgba(245,158,11,.75)':'rgba(239,68,68,.65)');
+        } else if(tipo==='cheats'){
+          bgColors=values.map(v=>v>0?'rgba(239,68,68,.7)':'#e8e8e4');
+        } else {
+          const goalLine=tipo==='pasos'?8000:7;
+          bgColors=values.map(v=>v===null||v===0?'#e8e8e4':v>=goalLine?color+'cc':color+'77');
+        }
 
-    } else if(tipo==='pasos'||tipo==='sueno'){
-      const field=tipo==='pasos'?'steps':'sleep_hours';
-      if(period==='semana'){
-        const wStart=getWeekStart();
-        const DAYS=['L','M','X','J','V','S','D'];
-        labels=DAYS;
-        values=DAYS.map((_,i)=>{const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);const ds=d.toISOString().slice(0,10);const m=data.find(r=>r.date===ds);return m?m[field]:null;});
-        const goalLine=tipo==='pasos'?8000:7;
-        _modalChart=new Chart(canvas,{type:'bar',data:{labels,datasets:[{data:values,backgroundColor:values.map(v=>v===null?'#e0e0dc':v>=(goalLine)?color+'cc':color+'66'),borderRadius:6,borderSkipped:false}]},options:{...\_chartOpts(tipo==='pasos'?'pasos':'h',0,null),plugins:{..._chartOpts().plugins,annotation:{annotations:{goal:{type:'line',yMin:goalLine,yMax:goalLine,borderColor:color,borderWidth:1.5,borderDash:[4,4]}}}}}});
-      } else {
-        const byWeek=_groupByWeek(data,'date',field);
-        const weeks=Object.keys(byWeek).sort();
-        const slice=period==='mes'?weeks.slice(-4):weeks.slice(-20);
-        labels=slice.map((w,i)=>'S'+(weeks.indexOf(w)+1));
-        values=slice.map(w=>byWeek[w].avg);
-        _modalChart=new Chart(canvas,{type:'bar',data:{labels,datasets:[{data:values,backgroundColor:color+'99',borderRadius:6,borderSkipped:false}]},options:_chartOpts(tipo==='pasos'?'pasos':'h',0,null)});
-      }
+        const datasets=[{data:values,backgroundColor:bgColors,borderRadius:5,borderSkipped:false,barThickness:'flex'}];
 
-    } else if(tipo==='cheats'){
-      // Group by day of week (semana) or by week (mes/historico)
-      if(period==='semana'){
-        const wStart=getWeekStart();
-        const DAYS=['L','M','X','J','V','S','D'];
-        labels=DAYS;
-        values=DAYS.map((_,i)=>{const d=new Date(wStart+'T12:00');d.setDate(d.getDate()+i);const ds=d.toISOString().slice(0,10);return data.filter(c=>c.date===ds).length;});
-        _modalChart=new Chart(canvas,{type:'bar',data:{labels,datasets:[{data:values,backgroundColor:values.map(v=>v>0?'rgba(239,68,68,.65)':'#e0e0dc'),borderRadius:6,borderSkipped:false}]},options:_chartOpts('cheats',0,null)});
-      } else {
-        const byWeek=_groupByWeekCount(data,'date');
-        const weeks=Object.keys(byWeek).sort();
-        const slice=period==='mes'?weeks.slice(-4):weeks.slice(-12);
-        labels=slice.map((w,i)=>'S'+(weeks.indexOf(w)+1));
-        values=slice.map(w=>byWeek[w]);
-        _modalChart=new Chart(canvas,{type:'bar',data:{labels,datasets:[{data:values,backgroundColor:'rgba(249,115,22,.7)',borderRadius:6,borderSkipped:false}]},options:_chartOpts('cheats',0,null)});
+        // Goal line para semana/1mes en pasos/sueno
+        if((tipo==='pasos'||tipo==='sueno')&&!isLarge){
+          const goalLine=tipo==='pasos'?8000:7;
+          datasets.push({type:'line',data:Array(labels.length).fill(goalLine),borderColor:color+'66',borderWidth:1.5,borderDash:[4,4],pointRadius:0,fill:false});
+        }
+
+        _modalChart=new Chart(canvas,{
+          type:'bar',
+          data:{labels,datasets},
+          options:_chartOpts(tipo==='pasos'?'':tipo==='sueno'?' h':tipo==='sesiones'?' ses':'',0,null,weekTooltips)
+        });
       }
-    }
+    }catch(e){console.error('Chart error:',e);}
   });
 }
 
-function _chartOpts(unit,minY,maxY){
-  return {
-    responsive:true,maintainAspectRatio:true,
-    plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>' '+ctx.parsed.y+(unit?' '+unit:'')}}},
-    scales:{
-      x:{grid:{display:false},ticks:{font:{size:11,family:"'DM Sans',sans-serif"},color:'#aaa'}},
-      y:{min:minY??undefined,max:maxY??undefined,grid:{color:'#f0f0ee'},ticks:{font:{size:10,family:"'DM Sans',sans-serif"},color:'#bbb'},border:{display:false}}
-    }
-  };
-}
-
-/* ── HELPERS ── */
+// ── HELPERS ──
 function _groupByWeek(data,dateField,valueField,sumFn){
   const byWeek={};
   data.forEach(d=>{
-    const dt=new Date(d[dateField]+'T12:00');
+    const dt=new Date((d[dateField]||'')+'T12:00');
+    if(isNaN(dt))return;
     const mon=new Date(dt);mon.setDate(dt.getDate()-(dt.getDay()===0?6:dt.getDay()-1));
     const k=mon.toISOString().slice(0,10);
     if(!byWeek[k])byWeek[k]={vals:[],sum:0,count:0};
@@ -1860,126 +2127,70 @@ function _groupByWeek(data,dateField,valueField,sumFn){
 function _groupByWeekCount(data,dateField){
   const byWeek={};
   data.forEach(d=>{
-    const dt=new Date(d[dateField]+'T12:00');
+    const dt=new Date((d[dateField]||'')+'T12:00');if(isNaN(dt))return;
     const mon=new Date(dt);mon.setDate(dt.getDate()-(dt.getDay()===0?6:dt.getDay()-1));
-    const k=mon.toISOString().slice(0,10);
-    byWeek[k]=(byWeek[k]||0)+1;
+    const k=mon.toISOString().slice(0,10);byWeek[k]=(byWeek[k]||0)+1;
   });
   return byWeek;
 }
 function _addDays(dateStr,n){
   const d=new Date(dateStr+'T12:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);
 }
-
-// ── EVOLUCIÓN MODAL ──
-async function openEvoModal(sessionType){
-  const c=selectedClient;
-  if(!c)return;
-  const {data:sessions}=await sb.from('workout_sessions').select('*,workout_sets(*)').eq('client_id',c.id).eq('session_type',sessionType).eq('completed',true).order('session_date',{ascending:false}).limit(15);
-  const arr=sessions||[];
-  if(!arr.length){showToast('Sin sesiones de '+sessionType+' registradas');return;}
-
-  const allExNames=[...new Set(arr.flatMap(s=>(s.workout_sets||[]).map(ws=>ws.exercise_name)))].filter(Boolean).slice(0,8);
-  let activeEx=allExNames[0]||'';
-
-  function buildEvoBody(exName){
-    const relevant=arr.map(s=>{
-      const sets=(s.workout_sets||[]).filter(ws=>ws.exercise_name===exName);
-      if(!sets.length)return null;
-      const maxKg=Math.max(...sets.map(ws=>ws.weight_kg||0));
-      return {date:s.session_date,maxKg,sets};
-    }).filter(Boolean).reverse();
-
-    const maxKgAll=Math.max(...relevant.map(r=>r.maxKg),1);
-    const prEntry=relevant.reduce((best,r)=>r.maxKg>=(best?.maxKg||0)?r:best,null);
-
-    const barsHtml=relevant.map((r,i)=>{
-      const h=Math.max(Math.round(r.maxKg/maxKgAll*64),2);
-      const isPR=r===prEntry;
-      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
-        <div class="cb${isPR?' hl':''}" style="height:${h}px;width:100%"></div>
-        <div class="cb-lbl${isPR?' hl':''}${!isPR&&i===relevant.length-1?' hl-am':''}">${r.maxKg}·S${i+1}${isPR?'★':''}</div>
-      </div>`;
-    }).join('');
-
-    const weeksHtml=relevant.reverse().slice(0,5).map((r,i)=>{
-      const isPR=r===prEntry;
-      const setsHtml=r.sets.slice(0,3).map((ws,si)=>`<div class="evo-s"><div class="evo-sv">${ws.reps_done||'?'}</div><div class="evo-sl">reps · s${si+1}</div></div>`).join('');
-      return `<div class="evo-week${i===0?' current':''}" style="margin-top:${i?7:0}px">
-        <div class="evo-wk-hd">
-          <span class="evo-wk-lbl">${fmtDateLong(r.date)}${isPR?`<span style="margin-left:7px;height:16px;padding:0 6px;border-radius:7px;background:var(--green);font-size:8.5px;font-weight:700;color:#fff;display:inline-flex;align-items:center;vertical-align:middle">★ PR</span>`:''}
-          </span>
-          <span class="evo-wk-kg">${r.maxKg} kg</span>
-        </div>
-        <div class="evo-series">${setsHtml}</div>
-      </div>`;
-    }).join('');
-
-    return `<div class="chart-bg"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:#bbb;margin-bottom:10px">Progresión kg máximo</div><div style="display:flex;align-items:flex-end;gap:7px;height:66px">${barsHtml}</div></div>
-    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:#bbb;margin-bottom:8px">Series registradas</div>${weeksHtml}`;
-  }
-
-  const chipsHtml=allExNames.map(n=>`<button class="evo-chip${n===activeEx?' on':''}" onclick="switchEvoEx(this,'${n}')">${n}</button>`).join('');
-
-  const html=`<div class="res-modal-wrap" id="res-modal-wrap" onclick="if(event.target.id==='res-modal-wrap')closeResModal()">
-    <div class="res-modal" style="width:660px">
-      <div class="mhd"><div><div class="mtitle">Ver evolución — ${sessionType}</div><div class="msub">${arr.length} sesiones · selecciona un ejercicio</div></div><button class="mclose" onclick="closeResModal()">✕</button></div>
-      <div class="evo-chips" id="evo-chips-wrap">${chipsHtml}</div>
-      <div class="mbody" id="evo-modal-body">${buildEvoBody(activeEx)}</div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend',html);
-
-  window._buildEvoBody=buildEvoBody;
+function fmtDateShort(str){
+  if(!str)return '';const d=new Date(str+'T12:00');
+  return d.getDate()+'/'+(d.getMonth()+1);
 }
 
-function switchEvoEx(btn,exName){
-  document.querySelectorAll('.evo-chip').forEach(b=>b.classList.remove('on'));
-  btn.classList.add('on');
-  document.getElementById('evo-modal-body').innerHTML=window._buildEvoBody(exName);
-}
+function closeResModal(){document.getElementById('res-modal-wrap')?.remove();}
 
 // ── MACROS POPUP ──
-function openMacrosModal(mealName,mealDataStr){
+function openMacrosModalEncoded(mealName,encodedData){
   try{
-    const mealData=typeof mealDataStr==='string'?JSON.parse(mealDataStr.replace(/\'/g,"'")):mealDataStr;
-    const items=mealData.items||[];
-    const totalKcal=items.reduce((a,it)=>a+(it.kcal||0),0);
-    const totalCh=items.reduce((a,it)=>a+(it.ch||0),0);
-    const totalG=items.reduce((a,it)=>a+(it.fat||it.g||0),0);
-    const totalP=items.reduce((a,it)=>a+(it.protein||it.p||0),0);
+    const decoded=decodeURIComponent(encodedData);
+    openMacrosModal(mealName,JSON.parse(decoded));
+  }catch(e){console.error('macros parse error',e);}
+}
+
+function openMacrosModal(mealName,mealData){
+  try{
+    const items=mealData.items||mealData.foods||[];
+    const totalKcal=Math.round(items.reduce((a,it)=>a+(it.kcal||it.calories||0),0));
+    const totalCh=Math.round(items.reduce((a,it)=>a+(it.ch||it.carbs||0),0));
+    const totalG=Math.round(items.reduce((a,it)=>a+(it.fat||it.g||0),0));
+    const totalP=Math.round(items.reduce((a,it)=>a+(it.protein||it.p||0),0));
     const total=totalCh+totalG+totalP||1;
+    const MEAL_ICONS_M={Desayuno:'☕',Comida:'🍗',Merienda:'🍎',Cena:'🌙','Pre-cama':'💊','Pre-entreno':'⚡','Post-entreno':'🥛'};
 
     const itemsHtml=items.map(it=>`<div class="macro-row-m">
-      <div><div class="macro-food">${it.name}</div><div class="macro-sub">${it.grams?it.grams+'g · ':''} CH ${it.ch||0}g · G ${it.fat||it.g||0}g · P ${it.protein||it.p||0}g</div></div>
-      <div class="macro-kcal">${it.kcal||0}<span style="font-size:11px;font-weight:400;color:#bbb"> kcal</span></div>
+      <div><div class="macro-food">${it.name||it.food||'—'}</div><div class="macro-sub">${it.grams?it.grams+'g · ':''}CH ${it.ch||it.carbs||0}g · G ${it.fat||it.g||0}g · P ${it.protein||it.p||0}g</div></div>
+      <div class="macro-kcal">${Math.round(it.kcal||it.calories||0)}<span style="font-size:11px;font-weight:400;color:#bbb"> kcal</span></div>
     </div>`).join('');
 
     const html=`<div class="res-modal-wrap" id="res-modal-wrap" onclick="if(event.target.id==='res-modal-wrap')closeResModal()">
       <div class="res-modal" style="width:360px">
         <div class="mhd">
-          <div style="display:flex;align-items:center;gap:10px"><span style="font-size:22px">${{Desayuno:'☕',Comida:'🍗',Merienda:'🍎',Cena:'🌙'}[mealName]||'🍽️'}</span><div><div class="mtitle" style="font-size:20px">${mealName}</div><div class="msub">${items.length} alimentos · ${totalKcal} kcal</div></div></div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:22px">${MEAL_ICONS_M[mealName]||'🍽️'}</span>
+            <div><div class="mtitle" style="font-size:20px">${mealName}</div><div class="msub">${items.length} alimentos · ${totalKcal} kcal</div></div>
+          </div>
           <button class="mclose" onclick="closeResModal()">✕</button>
         </div>
         <div class="mbody">
-          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#bbb;margin-bottom:9px">Alimentos</div>
-          ${itemsHtml}
-          <div style="background:#f5f5f3;border-radius:14px;padding:13px;margin-top:4px">
-            <div class="macro-bar"><div style="flex:${totalCh};background:#3b82f6;border-radius:4px 0 0 4px"></div><div style="flex:${totalG};background:#f59e0b"></div><div style="flex:${totalP};background:var(--green);border-radius:0 4px 4px 0"></div></div>
+          ${items.length?`<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#bbb;margin-bottom:9px">Alimentos</div>${itemsHtml}`:'<div style="color:#bbb;font-size:13px;padding:10px 0">Sin detalle de alimentos</div>'}
+          ${items.length?`<div style="background:#f5f5f3;border-radius:14px;padding:13px;margin-top:4px">
+            <div class="macro-bar" style="margin-bottom:10px"><div style="flex:${totalCh};background:#3b82f6;border-radius:4px 0 0 4px"></div><div style="flex:${totalG};background:#f59e0b"></div><div style="flex:${totalP};background:var(--green);border-radius:0 4px 4px 0"></div></div>
             <div class="macro-totals">
-              <div class="macro-t" style="background:#eff6ff"><div class="mv" style="color:#2563eb">${totalCh}g</div><div class="ml" style="color:#2563eb">Carbos</div><div class="mp">${Math.round(totalCh/total*100)}% del total</div></div>
-              <div class="macro-t" style="background:#fffbeb"><div class="mv" style="color:#f59e0b">${totalG}g</div><div class="ml" style="color:#f59e0b">Grasas</div><div class="mp">${Math.round(totalG/total*100)}% del total</div></div>
-              <div class="macro-t" style="background:#f0fdf4"><div class="mv" style="color:var(--green)">${totalP}g</div><div class="ml" style="color:var(--green)">Proteína</div><div class="mp">${Math.round(totalP/total*100)}% del total</div></div>
+              <div class="macro-t" style="background:#eff6ff"><div class="mv" style="color:#2563eb">${totalCh}g</div><div class="ml" style="color:#2563eb">Carbos</div><div class="mp">${Math.round(totalCh/total*100)}%</div></div>
+              <div class="macro-t" style="background:#fffbeb"><div class="mv" style="color:#f59e0b">${totalG}g</div><div class="ml" style="color:#f59e0b">Grasas</div><div class="mp">${Math.round(totalG/total*100)}%</div></div>
+              <div class="macro-t" style="background:#f0fdf4"><div class="mv" style="color:var(--green)">${totalP}g</div><div class="ml" style="color:var(--green)">Proteína</div><div class="mp">${Math.round(totalP/total*100)}%</div></div>
             </div>
-          </div>
+          </div>`:''}
         </div>
       </div>
     </div>`;
     document.body.insertAdjacentHTML('beforeend',html);
-  }catch(e){console.error(e);showToast('Error al cargar macros');}
+  }catch(e){console.error('macros modal error',e);}
 }
-
-function closeResModal(){document.getElementById('res-modal-wrap')?.remove();}
 function showAlertsModal(){showToast('Ver alertas');}
 
 async function loadClientView(){
@@ -2006,7 +2217,12 @@ async function loadClientView(){
   const cheats=cheatsRes.data||[];
   const allSessions=allSessionsRes.data||[];
   const activePlan=planRes.data;
-  const split=activePlan?.split||null;
+  // Normalizar split: puede venir como Array JSON o string
+  let split=activePlan?.split||null;
+  if(split&&typeof split==='string'){try{split=JSON.parse(split);}catch{split=null;}}
+  if(split&&!Array.isArray(split)) split=null;
+  if(split) c._split=split; // cache para modales
+  console.log('[Tracc] split cargado:', split);
 
   // Cache nutrition on the client object
   if(nutRes.data){
@@ -2125,69 +2341,98 @@ const SESSION_TYPES = ['PUSH','PULL','LEG','TORSO','BRAZO','DESCANSO'];
 const DAYS_ES = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
 
 async function renderEntrenoTab(c){
-  // Load active training plan
-  const {data:plan}=await sb.from('training_plans').select('*').eq('client_id',c.id).eq('is_active',true).maybeSingle();
-  
-  // Load all sessions this week
+  // Load active training plan + exercises from client_plans table
   const wkStart=getWeekStart();
-  const {data:sessions}=await sb.from('workout_sessions').select('*,workout_sets(*)').eq('client_id',c.id).order('session_date',{ascending:false}).limit(30);
-  const allSess=sessions||[];
+  const [planRes,exsRes,sessRes]=await Promise.all([
+    sb.from('training_plans').select('*').eq('client_id',c.id).eq('is_active',true).maybeSingle(),
+    // client_plans tiene: client_id, coach_id, exercise_id, session_type, exercise_order, sets, reps, rest_sec
+    sb.from('client_plans').select('*,exercises(name,video_url)').eq('client_id',c.id).order('session_type').order('exercise_order'),
+    sb.from('workout_sessions').select('*,workout_sets(*)').eq('client_id',c.id).order('session_date',{ascending:false}).limit(30),
+  ]);
+
+  const plan=planRes.data||null;
+  const allSess=sessRes.data||[];
   const wkSess=allSess.filter(s=>s.session_date>=wkStart);
-  const completed=wkSess.filter(s=>s.completed);
 
-  // Load plan exercises if plan exists
-  let planExercises=[];
-  if(plan){
-    const {data:exs}=await sb.from('plan_exercises').select('*').eq('training_plan_id',plan.id).order('day_number').order('order_index');
-    planExercises=exs||[];
-  }
+  // Normalizar split: puede ser array JSON o string JSON
+  let splitDays=plan?.split||null;
+  if(splitDays&&typeof splitDays==='string'){try{splitDays=JSON.parse(splitDays);}catch{splitDays=null;}}
+  if(!Array.isArray(splitDays)) splitDays=['TORSO','DESCANSO','LEG','PUSH','PULL','DESCANSO','DESCANSO'];
 
-  const splitDays=plan?.split||['TORSO','DESCANSO','LEG','PUSH','PULL','DESCANSO','DESCANSO'];
+  // Normalizar ejercicios: client_plans tiene session_type como clave
+  // Agrupar por session_type
+  const rawExs=exsRes.data||[];
+  // También intentar con exercises directo si client_plans viene vacío
+  let planExsByType={};
+  rawExs.forEach(ex=>{
+    const st=ex.session_type||ex.day_type||'?';
+    if(!planExsByType[st]) planExsByType[st]=[];
+    planExsByType[st].push({
+      exercise_name: ex.exercises?.name || ex.exercise_name || ex.name || '—',
+      sets: ex.sets||3,
+      reps: ex.reps||'10',
+      rest_sec: ex.rest_sec||ex.rest||90,
+      exercise_order: ex.exercise_order||ex.order_index||0,
+      video_url: ex.exercises?.video_url||null
+    });
+  });
+  // Ordenar por exercise_order dentro de cada tipo
+  Object.keys(planExsByType).forEach(k=>{
+    planExsByType[k].sort((a,b)=>a.exercise_order-b.exercise_order);
+  });
+
+  // Obtener tipos de sesión únicos presentes en el split
+  const trainDays=[...new Set(splitDays.filter(s=>s&&s!=='DESCANSO'&&s!=='OFF'&&s!=='DSC'))];
 
   return `<div class="content">
-    <!-- Plan actual -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="section-title" style="margin-bottom:0">Plan de entreno activo</div>
-      <button class="ch-action-btn primary" onclick="showCreatePlanModal('${c.id}')">+ Crear / editar plan</button>
+      <button class="ch-action-btn primary" onclick="showCreatePlanModal('${c.id}')">+ Editar plan</button>
     </div>
 
-    ${plan?`
-    <!-- Week split -->
-    <div class="week-strip" style="margin-bottom:14px">
+    <!-- Week split visual -->
+    <div class="week-strip" style="margin-bottom:16px">
       ${splitDays.map((sess,i)=>{
         const dd=getDayDateFromWeekStart(i);
         const session=wkSess.find(s=>s.session_date===dd);
         const done=session?.completed;
-        return `<div class="day-cell${done?' trained':sess==='DESCANSO'?' rest':''}">
-          <div class="day-name">${DAYS_ES[i].slice(0,3).toUpperCase()}</div>
-          <div class="day-check">${done?'✓':sess==='DESCANSO'?'—':'·'}</div>
-          <div class="day-session">${sess}</div>
+        const isOff=!sess||sess==='DESCANSO'||sess==='OFF'||sess==='DSC';
+        return `<div class="day-cell${done?' trained':isOff?' rest':''}">
+          <div class="day-name">${['LUN','MAR','MIÉ','JUE','VIE','SÁB','DOM'][i]}</div>
+          <div class="day-check">${done?'✓':isOff?'—':'·'}</div>
+          <div class="day-session">${isOff?'DSC':sess}</div>
         </div>`;
       }).join('')}
     </div>
 
-    <!-- Exercises by day -->
-    ${splitDays.map((sess,i)=>{
-      if(sess==='DESCANSO')return '';
-      const dayExs=planExercises.filter(e=>e.day_number===i+1);
-      if(!dayExs.length)return '';
-      return `<div class="panel-card" style="margin-bottom:10px">
-        <div class="panel-title">${DAYS_ES[i]} — ${sess}
-          <span style="font-size:11px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">${dayExs.length} ejercicios</span>
+    <!-- Ejercicios por tipo de sesión -->
+    ${trainDays.length?trainDays.map(sessType=>{
+      const exs=planExsByType[sessType]||[];
+      if(!exs.length) return `<div class="panel-card" style="margin-bottom:10px">
+        <div class="panel-title">${sessType}
+          <span style="font-weight:400;color:var(--text3);font-size:11px;text-transform:none;letter-spacing:0">sin ejercicios configurados</span>
         </div>
-        ${dayExs.map((ex,idx)=>`<div class="workout-row">
-          <div class="ex-num">${idx+1}</div>
-          <div class="ex-name">${ex.exercise_name}</div>
-          <div class="ex-sets">${ex.sets}×${ex.reps}</div>
-          <div class="ex-vol">${ex.rest||'—'}</div>
-        </div>`).join('')}
       </div>`;
-    }).join('')}
-    `:`<div class="panel-card" style="margin-bottom:14px">
+      return `<div class="panel-card" style="margin-bottom:10px">
+        <div class="panel-title">${sessType}
+          <span style="font-size:11px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">${exs.length} ejercicios</span>
+        </div>
+        ${exs.map((ex,idx)=>{
+          const restStr=ex.rest_sec?Math.floor(ex.rest_sec/60)>0?Math.floor(ex.rest_sec/60)+"'":ex.rest_sec+'"':'—';
+          return `<div class="workout-row">
+            <div class="ex-num">${idx+1}</div>
+            <div class="ex-name">${ex.exercise_name}</div>
+            <div class="ex-sets">${ex.sets}×${ex.reps}</div>
+            <div class="ex-vol">${restStr}</div>
+            ${ex.video_url?`<a href="${ex.video_url}" target="_blank" style="font-size:10px;color:var(--blue);text-decoration:none;white-space:nowrap">▶ video</a>`:''}
+          </div>`;
+        }).join('')}
+      </div>`;
+    }).join(''):`<div class="panel-card" style="margin-bottom:14px">
       <div class="empty-state" style="padding:24px">
         <div class="empty-icon">📋</div>
-        <div class="empty-title">Sin plan activo</div>
-        <div class="empty-sub">Crea el plan de entreno para ${c.name.split(' ')[0]} y lo verá automáticamente en su app.</div>
+        <div class="empty-title">Sin ejercicios configurados</div>
+        <div class="empty-sub">Los ejercicios se cargan desde Supabase (tabla client_plans). Comprueba que están cargados.</div>
       </div>
     </div>`}
 
@@ -3028,13 +3273,41 @@ function showOption(idx, tabEl){
   document.getElementById('option-display').innerHTML=renderOptionDisplay(currentOptions[idx]);
 }
 
+function _normMeals(opt){
+  // Normaliza opt.meals que puede ser:
+  // {Desayuno:{items:[{name,grams,kcal,protein,carbs,fat,...}]}} — objeto con keys = nombre comida
+  // [{name:'Desayuno',items:[...]}] — array
+  // También normaliza los campos de items (protein_g vs protein vs p, etc.)
+  const raw=opt?.meals||opt?.foods||{};
+  let arr=[];
+  if(Array.isArray(raw)){
+    arr=raw;
+  } else if(typeof raw==='object'){
+    arr=Object.entries(raw).map(([name,data])=>({
+      name, items:data?.items||data?.foods||[]
+    }));
+  }
+  // Normalizar campos de cada item
+  return arr.map(m=>({
+    ...m,
+    items:(m.items||[]).map(it=>({
+      name:it.name||it.food||'—',
+      grams:it.grams||it.quantity||null,
+      kcal:it.kcal||it.calories||0,
+      protein:it.protein||it.protein_g||it.p||0,
+      carbs:it.carbs||it.carbs_g||it.ch||it.c||0,
+      fat:it.fat||it.fat_g||it.g||0,
+    }))
+  }));
+}
+
 function renderOptionDisplay(opt){
   if(!opt)return '';
-  const meals=opt.meals||{};
-  const totalKcal=Object.values(meals).reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.kcal||0),0),0);
-  const totalP=Object.values(meals).reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.protein_g||0),0),0);
-  const totalC=Object.values(meals).reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.carbs_g||0),0),0);
-  const totalG=Object.values(meals).reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.fat_g||0),0),0);
+  const meals=_normMeals(opt);
+  const totalKcal=meals.reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.kcal||0),0),0);
+  const totalP=meals.reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.protein||0),0),0);
+  const totalC=meals.reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.carbs||0),0),0);
+  const totalG=meals.reduce((a,m)=>a+(m.items||[]).reduce((b,i)=>b+(i.fat||0),0),0);
 
   return `<div class="panel-card">
     <div class="panel-title">${opt.name||'Opción'}
@@ -3045,16 +3318,15 @@ function renderOptionDisplay(opt){
         <span class="opcion-macro-pill mp-r">${Math.round(totalG)}g G</span>
       </div>
     </div>
-    ${MEALS.map(meal=>{
-      const m=meals[meal]||{items:[]};
+    ${meals.map(m=>{
       const mKcal=m.items.reduce((a,i)=>a+(i.kcal||0),0);
       if(!m.items.length)return '';
       return `<div style="margin-bottom:12px">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:6px">${MEAL_EMOJIS[meal]||''} ${meal} · ${Math.round(mKcal)} kcal</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:6px">${MEAL_EMOJIS[m.name]||'🍽️'} ${m.name} · ${Math.round(mKcal)} kcal</div>
         ${m.items.map(item=>`<div class="workout-row">
           <div class="ex-name">${item.name}</div>
           <div style="font-size:11px;color:var(--text3);white-space:nowrap">${item.grams?item.grams+'g':''}</div>
-          <div class="ex-vol" style="color:var(--green)">${item.kcal||''}${item.kcal?' kcal':''}</div>
+          <div class="ex-vol" style="color:var(--green)">${item.kcal?Math.round(item.kcal)+' kcal':''}</div>
         </div>`).join('')}
       </div>`;
     }).join('')}
@@ -3375,8 +3647,83 @@ async function rejectRequest(reqId){
   showRequests();
 }
 
+
+// ── DEBUG SUPABASE ──
+window.debugSupabase = async function() {
+  const clientId = selectedClient?.id;
+  if (!clientId) { alert("Selecciona un cliente primero"); return; }
+
+  // Crear panel visual en pantalla
+  let panel = document.getElementById("debug-panel");
+  if (panel) panel.remove();
+  panel = document.createElement("div");
+  panel.id = "debug-panel";
+  panel.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;padding:20px;overflow:auto;color:#0f0;font-family:monospace;font-size:11px";
+  const closeBtn = '<button onclick="document.getElementById(&quot;debug-panel&quot;).remove()" style="float:right;padding:4px 12px;background:#333;border:1px solid #666;color:#fff;cursor:pointer;border-radius:4px">&times; Cerrar</button>';
+  panel.innerHTML = '<div style="color:#fff;font-size:14px;margin-bottom:16px">&#128269; Debug: ' + selectedClient.name + ' ' + closeBtn + '</div><div id="debug-output">Cargando...</div>';
+  document.body.appendChild(panel);
+  const out = document.getElementById("debug-output");
+  const log = (title, data) => {
+    out.innerHTML += '<hr style="border-color:#333;margin:10px 0"><div style="color:#ff0;margin-bottom:4px">▶ ' + title + '</div><pre style="color:#0f0;white-space:pre-wrap;word-break:break-all">' + JSON.stringify(data, null, 2) + '</pre>';
+    panel.scrollTop = panel.scrollHeight;
+  };
+
+  try {
+    const tp = await sb.from("training_plans").select("*").eq("client_id", clientId);
+    log("training_plans", {error: tp.error, count: tp.data?.length, data: tp.data});
+
+    const cp = await sb.from("client_plans").select("*").eq("client_id", clientId).limit(3);
+    log("client_plans (3 rows)", {error: cp.error, count: cp.data?.length, data: cp.data});
+
+    const cpe = await sb.from("client_plans").select("*,exercises(*)").eq("client_id", clientId).limit(3);
+    log("client_plans + exercises JOIN (3 rows)", {error: cpe.error, data: cpe.data});
+
+    const np = await sb.from("nutrition_plans").select("*").eq("client_id", clientId);
+    log("nutrition_plans", {error: np.error, data: np.data});
+
+    const npId = np.data?.[0]?.id;
+    if (npId) {
+      const no = await sb.from("nutrition_options").select("*").eq("nutrition_plan_id", npId).limit(2);
+      log("nutrition_options (2 rows)", {error: no.error, data: no.data});
+    } else {
+      log("nutrition_options", "SIN nutrition_plan encontrado");
+    }
+
+    const today = new Date().toISOString().slice(0,10);
+    const dm = await sb.from("daily_metrics").select("*").eq("client_id", clientId).eq("date", today);
+    log("daily_metrics HOY " + today, {error: dm.error, data: dm.data});
+
+    out.innerHTML += '<hr style="border-color:#333"><div style="color:#0ff;font-size:13px;margin-top:10px">✅ DONE — Haz scroll arriba, selecciona todo el texto verde y cópialo</div>';
+  } catch(e) {
+    log("ERROR CRITICO", e.message);
+  }
+};
+
 // ── BOOT ──
 async function boot(){
+  // Detectar si se está ejecutando desde file:// (sin servidor)
+  if(window.location.protocol==='file:'){
+    document.getElementById('screen-loading').classList.add('hidden');
+    document.body.innerHTML=`<div style="position:fixed;inset:0;background:#1a1a18;display:flex;align-items:center;justify-content:center;font-family:'DM Sans',sans-serif">
+      <div style="background:#fff;border-radius:20px;padding:40px 48px;max-width:480px;text-align:center;box-shadow:0 32px 80px rgba(0,0,0,.4)">
+        <div style="font-size:48px;margin-bottom:16px">⚠️</div>
+        <div style="font-size:22px;font-weight:700;color:#1a1a18;margin-bottom:10px">Tracc no puede abrirse como archivo local</div>
+        <div style="font-size:14px;color:#666;line-height:1.6;margin-bottom:24px">El navegador bloquea la conexión a Supabase cuando abres el archivo directamente desde el disco. Necesitas subirlo a GitHub Pages.</div>
+        <div style="background:#f5f5f3;border-radius:12px;padding:16px;text-align:left;margin-bottom:20px">
+          <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px">Cómo subirlo (2 minutos):</div>
+          <div style="font-size:13px;color:#333;line-height:1.9">
+            1. Ve a <strong>github.com/hugomen2001-create</strong><br>
+            2. Entra al repo <strong>Tracc</strong> (o créalo si no existe)<br>
+            3. Sube este archivo como <strong>tracc.html</strong><br>
+            4. Settings → Pages → Branch: main → Save<br>
+            5. Accede a <strong>hugomen2001-create.github.io/Tracc/tracc.html</strong>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#999">Una vez subido, funcionará para siempre con todos los clientes.</div>
+      </div>
+    </div>`;
+    return;
+  }
   try{
     const {data:{session}}=await sb.auth.getSession();
     if(session){
