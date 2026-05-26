@@ -352,6 +352,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 
 /* ── HIDDEN ── */
 .hidden{display:none!important}
+@keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
 /* ══════════════════════════════════════════════
    RESUMEN TAB — nuevo sistema de diseño
@@ -724,8 +725,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
           <div class="logo-icon">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16M18 4v16"/><rect x="2" y="8" width="4" height="8" rx="1"/><rect x="18" y="8" width="4" height="8" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/></svg>
           </div>
-          <div>
-            <div class="logo-text">Tracc</div>
+          <div style="flex:1">
+            <div class="logo-text" style="display:flex;align-items:center;gap:6px">Tracc
+              <div id="realtime-dot" style="width:6px;height:6px;border-radius:50%;background:#f59e0b;flex-shrink:0" title="Conectando..."></div>
+            </div>
             <div class="logo-sub">Dashboard</div>
           </div>
         </div>
@@ -786,7 +789,78 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 // ── SUPABASE ──
 const SUPABASE_URL = 'https://zniepgmzwhbxpsztpvli.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpuaWVwZ216d2hieHBzenRwdmxpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzcxMzksImV4cCI6MjA5NTA1MzEzOX0.fYwxr4D6NYYxwSS-R37NoTEmCf_KkInWoOegSJP-rhk';
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  realtime: { params: { eventsPerSecond: 10 } }
+});
+
+// ── REALTIME: se actualiza solo cuando Hugo cambia datos ──
+let _realtimeChannel = null;
+
+function startRealtime(clientId) {
+  // Limpiar canal anterior si existe
+  if (_realtimeChannel) {
+    sb.removeChannel(_realtimeChannel);
+    _realtimeChannel = null;
+  }
+  if (!clientId) return;
+
+  // Escuchar cambios en las tablas que Hugo puede modificar desde MyTracc
+  _realtimeChannel = sb.channel('client-' + clientId)
+    .on('postgres_changes', {
+      event: '*', schema: 'public', table: 'daily_metrics',
+      filter: 'client_id=eq.' + clientId
+    }, () => _onRemoteChange('métricas'))
+    .on('postgres_changes', {
+      event: '*', schema: 'public', table: 'workout_sessions',
+      filter: 'client_id=eq.' + clientId
+    }, () => _onRemoteChange('entreno'))
+    .on('postgres_changes', {
+      event: '*', schema: 'public', table: 'workout_sets'
+    }, () => _onRemoteChange('series'))
+    .on('postgres_changes', {
+      event: '*', schema: 'public', table: 'cheats',
+      filter: 'client_id=eq.' + clientId
+    }, () => _onRemoteChange('cheats'))
+    .on('postgres_changes', {
+      event: '*', schema: 'public', table: 'training_plans',
+      filter: 'client_id=eq.' + clientId
+    }, () => _onRemoteChange('plan entreno'))
+    .on('postgres_changes', {
+      event: '*', schema: 'public', table: 'nutrition_plans',
+      filter: 'client_id=eq.' + clientId
+    }, () => _onRemoteChange('dieta'))
+    .subscribe((status) => {
+      const dot = document.getElementById('realtime-dot');
+      if (dot) {
+        dot.style.background = status === 'SUBSCRIBED' ? '#16a34a' : '#f59e0b';
+        dot.title = status === 'SUBSCRIBED' ? 'En tiempo real ✓' : 'Conectando...';
+      }
+    });
+}
+
+let _realtimeDebounce = null;
+function _onRemoteChange(tipo) {
+  // Mostrar indicador visual
+  _showRealtimePulse(tipo);
+  // Debounce para no recargar múltiples veces en ráfaga
+  clearTimeout(_realtimeDebounce);
+  _realtimeDebounce = setTimeout(() => {
+    if (selectedClient && selectedTab === 'resumen') {
+      loadClientView();
+    }
+  }, 800);
+}
+
+function _showRealtimePulse(tipo) {
+  const existing = document.getElementById('realtime-toast');
+  if (existing) existing.remove();
+  const el = document.createElement('div');
+  el.id = 'realtime-toast';
+  el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1a1a18;color:#fff;padding:8px 14px;border-radius:20px;font-size:12px;font-weight:600;z-index:3000;display:flex;align-items:center;gap:7px;box-shadow:0 4px 20px rgba(0,0,0,.2);animation:slideIn .2s ease';
+  el.innerHTML = '<div style="width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0"></div> Actualizado: ' + tipo;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
 
 const DAYS = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
 const DEFAULT_PLAN = ['TORSO','DESCANSO','LEG','PUSH','PULL','DESCANSO','DESCANSO'];
@@ -1208,6 +1282,7 @@ async function selectClient(id){
   if(!selectedClient)return;
   renderClientList(allClients);
   selectedTab='resumen';
+  startRealtime(id); // escuchar cambios en tiempo real
   await loadClientView();
 }
 
@@ -1273,7 +1348,7 @@ function buildWeekStrip(sessions,split,weekOffset){
     const dayMidnight=new Date(dayDate.getFullYear(),dayDate.getMonth(),dayDate.getDate());
 
     const sess=split?split[i]:null;
-    const isOff=!sess||['DESCANSO','OFF','DSC','off','descanso'].includes(sess);
+    const isOff=!sess||sess==='OFF'||sess==='DESCANSO'||sess==='DSC';
     const session=sessions.find(s=>s.session_date===dateStr);
     const isCompleted=session?.completed;
     const isTodayDay=dateStr===todayStr();
@@ -1466,14 +1541,14 @@ function buildResumenContent(c,metrics,sessions,cheats,allSessions,displayMetric
         <div class="meal-kcal-r">${mKcal?mKcal+' kcal':''}</div>
       </div>`;
     }).join(''):`<div style="font-size:12px;color:#bbb;padding:10px 0">
-      Plan: ${np.name||'Plan activo'}<br>
+      Plan: ${np.style||'Mediterránea'}<br>
       <span style="font-size:10.5px">P:${np.protein_g||'?'}g · C:${np.carbs_g||np.ch_g||'?'}g · G:${np.fat_g||'?'}g</span>
     </div>`;
 
     dietCard=`<div class="res-card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
         <div class="res-ctitle" style="margin-bottom:0">Dieta${isHistoric?' (plan activo)':' de hoy'}</div>
-        <div style="font-size:12px;font-weight:700;color:var(--green)">${np.name||'Plan activo'} · ${kcalGoal} kcal</div>
+        <div style="font-size:12px;font-weight:700;color:var(--green)">${np.style||'Plan activo'} · ${kcalGoal} kcal</div>
       </div>
       <div class="diet-bar-r"><div class="diet-fill-r" style="width:${pct}%"></div></div>
       <div style="font-size:10px;color:#bbb;margin-bottom:8px">P:${np.protein_g||'?'}g · C:${np.carbs_g||np.ch_g||'?'}g · G:${np.fat_g||'?'}g · toca para ver macros</div>
@@ -2217,12 +2292,12 @@ async function loadClientView(){
   const cheats=cheatsRes.data||[];
   const allSessions=allSessionsRes.data||[];
   const activePlan=planRes.data;
-  // Normalizar split: puede venir como Array JSON o string
+  // Normalizar split desde Postgres (array nativo, string JSON, o null)
   let split=activePlan?.split||null;
   if(split&&typeof split==='string'){try{split=JSON.parse(split);}catch{split=null;}}
-  if(split&&!Array.isArray(split)) split=null;
-  if(split) c._split=split; // cache para modales
-  console.log('[Tracc] split cargado:', split);
+  if(split&&!Array.isArray(split)) split=Object.values(split);
+  if(Array.isArray(split)) split=split.map(s=>(!s||s==='null'||s===null)?'OFF':String(s).toUpperCase());
+  if(split&&split.length) c._split=split;
 
   // Cache nutrition on the client object
   if(nutRes.data){
@@ -2260,6 +2335,9 @@ async function loadClientView(){
       </div>
       <div class="ch-actions" style="display:flex;align-items:center;gap:6px;flex-shrink:0">
         ${alertCount>0?`<button class="btn-alert-h" onclick="showAlertsModal()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>${alertCount} alerta${alertCount>1?'s':''}</button>`:''}
+        <button class="btn-edit-h" onclick="loadClientView()" title="Recargar datos" style="padding:0 10px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
         <button class="btn-edit-h" onclick="setTab('plan')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Editar plan</button>
         <button class="btn-msg-h" onclick="showToast('Mensaje — próximamente')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>+ Mensaje</button>
       </div>
@@ -2354,10 +2432,13 @@ async function renderEntrenoTab(c){
   const allSess=sessRes.data||[];
   const wkSess=allSess.filter(s=>s.session_date>=wkStart);
 
-  // Normalizar split: puede ser array JSON o string JSON
+  // Normalizar split desde Postgres (array nativo, string JSON, o null)
   let splitDays=plan?.split||null;
   if(splitDays&&typeof splitDays==='string'){try{splitDays=JSON.parse(splitDays);}catch{splitDays=null;}}
-  if(!Array.isArray(splitDays)) splitDays=['TORSO','DESCANSO','LEG','PUSH','PULL','DESCANSO','DESCANSO'];
+  if(splitDays&&!Array.isArray(splitDays)) splitDays=Object.values(splitDays);
+  if(!splitDays||!splitDays.length) splitDays=['OFF','TORSO','OFF','LEG','PUSH','PULL','OFF'];
+  // Normalizar valores: OFF→OFF, null→OFF
+  splitDays=splitDays.map(s=>(!s||s==='null'||s===null)?'OFF':String(s).toUpperCase());
 
   // Normalizar ejercicios: client_plans tiene session_type como clave
   // Agrupar por session_type
@@ -2382,7 +2463,7 @@ async function renderEntrenoTab(c){
   });
 
   // Obtener tipos de sesión únicos presentes en el split
-  const trainDays=[...new Set(splitDays.filter(s=>s&&s!=='DESCANSO'&&s!=='OFF'&&s!=='DSC'))];
+  const trainDays=[...new Set(splitDays.filter(s=>s&&!['DESCANSO','OFF','DSC','off','descanso'].includes(s)))];
 
   return `<div class="content">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -3516,7 +3597,9 @@ async function saveDietPlan(clientId){
   await sb.from('nutrition_options').insert(optsToInsert);
 
   document.getElementById('diet-modal')?.remove();
-  showToast('✓ Plan nutricional guardado','green');
+  showToast('✓ Dieta guardada · Hugo la verá en MyTracc','green');
+    // Recargar la vista para reflejar cambios
+    if(selectedClient) setTimeout(()=>loadClientView(),500);
   dietItemCount={};dietOptionCount=0;
   loadClientView();
 }
